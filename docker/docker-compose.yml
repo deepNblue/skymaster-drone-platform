@@ -1,0 +1,268 @@
+version: '3.8'
+
+services:
+  # PostgreSQL数据库
+  postgres:
+    image: postgres:13
+    container_name: skymaster-postgres
+    environment:
+      POSTGRES_USER: skymaster
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: skymaster
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - skymaster-network
+    restart: unless-stopped
+
+  # TimescaleDB (用于时序数据)
+  timescaledb:
+    image: timescale/timescaledb:latest-pg13
+    container_name: skymaster-timescaledb
+    environment:
+      POSTGRES_USER: skymaster
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: skymaster_telemetry
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    networks:
+      - skymaster-network
+    restart: unless-stopped
+
+  # Redis
+  redis:
+    image: redis:6-alpine
+    container_name: skymaster-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - skymaster-network
+    restart: unless-stopped
+
+  # RabbitMQ (消息队列)
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: skymaster-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: skymaster
+      RABBITMQ_DEFAULT_PASS: password
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - skymaster-network
+    restart: unless-stopped
+
+  # 后端API服务
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: skymaster-backend
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql://skymaster:password@postgres:5432/skymaster
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+    volumes:
+      - ../backend:/app
+      - ../uploads:/app/uploads
+      - ../logs:/app/logs
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+      - rabbitmq
+    networks:
+      - skymaster-network
+    restart: unless-stopped
+    command: uvicorn api.v1.main:app --host 0.0.0.0 --port 8000
+
+  # Celery Worker
+  celery-worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: skymaster-celery-worker
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql://skymaster:password@postgres:5432/skymaster
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+    volumes:
+      - ../backend:/app
+    depends_on:
+      - redis
+      - rabbitmq
+    networks:
+      - skymaster-network
+    restart: unless-stopped
+    command: celery -A tasks worker --loglevel=info
+
+  # Celery Beat (定时任务)
+  celery-beat:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: skymaster-celery-beat
+    environment:
+      - ENVIRONMENT=production
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+    volumes:
+      - ../backend:/app
+    depends_on:
+      - redis
+      - rabbitmq
+    networks:
+      - skymaster-network
+    restart: unless-stopped
+    command: celery -A tasks beat --loglevel=info
+
+  # 视频流服务器 (RTSP)
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: skymaster-mediamtx
+    environment:
+      - MTX_PROTOCOLS=tcp
+      - MTX_RTSPADDRESS=:8554
+    ports:
+      - "8554:8554"
+      - "1935:1935"
+      - "8888:8888"
+    networks:
+      - skymaster-network
+    restart: unless-stopped
+
+  # WebRTC信令服务器
+  webrtc-signaling:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.webrtc
+    container_name: skymaster-webrtc
+    environment:
+      - PORT=8080
+    ports:
+      - "8080:8080"
+    networks:
+      - skymaster-network
+    restart: unless-stopped
+
+  # 前端应用 (Nginx)
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: skymaster-frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+    depends_on:
+      - backend
+    networks:
+      - skymaster-network
+    restart: unless-stopped
+
+  # Prometheus (监控)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: skymaster-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - skymaster-network
+    restart: unless-stopped
+
+  # Grafana (可视化)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: skymaster-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-clock-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - skymaster-network
+    restart: unless-stopped
+
+  # 日志收集 (ELK Stack - 可选)
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.15.0
+    container_name: skymaster-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    networks:
+      - skymaster-network
+    restart: unless-stopped
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.15.0
+    container_name: skymaster-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+    networks:
+      - skymaster-network
+    restart: unless-stopped
+
+  # MAVLink仿真器 (用于测试)
+  mavlink-simulator:
+    build:
+      context: ../simulator
+      dockerfile: Dockerfile
+    container_name: skymaster-simulator
+    environment:
+      - SIMULATOR_PORT=14550
+    ports:
+      - "14550:14550/udp"
+      - "14551:14551/udp"
+    networks:
+      - skymaster-network
+    restart: unless-stopped
+
+networks:
+  skymaster-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  timescaledb_data:
+  redis_data:
+  rabbitmq_data:
+  prometheus_data:
+  grafana_data:
+  elasticsearch_data:
