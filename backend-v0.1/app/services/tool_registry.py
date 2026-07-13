@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -234,6 +234,7 @@ async def create_mission(
     except ValueError:
         return {"ok": False, "reason": "invalid drone_id"}
     mission = Mission(
+        id=uuid4(),
         org_id=ctx.org_id,
         drone_id=drone_uuid,
         name=args.name,

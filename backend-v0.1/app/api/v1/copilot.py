@@ -7,6 +7,13 @@ Endpoints:
 * ``GET    /copilot/sessions/{sid}/traces``   — list traces for a session
 * ``GET    /copilot/traces/{tid}``            — get a single trace (with steps)
 * ``POST   /copilot/traces/{tid}/approve``    — decide on a pending approval
+
+v2 (T4.0 / T4.1):
+* ``POST   /copilot/v2/sessions/{sid}/messages`` — Function Calling loop
+* ``POST   /copilot/v2/approvals/{aid}/decide``  — approve/reject a
+  sensitive tool call queued by the v2 loop; the tool executes here
+  (or is recorded as rejected) and the outcome is written into the
+  trace as a new step.
 """
 from __future__ import annotations
 
@@ -18,6 +25,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -242,6 +250,9 @@ async def post_message_v2(
                 task.cancel()
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+
+def _sse_frame(evt: dict[str, Any]) -> bytes:
     """Format a dict as an ``event: X\\ndata: {..}\\n\\n`` SSE frame."""
     evt_type = str(evt.get("type") or "message")
     data = evt.get("data")
@@ -472,6 +483,188 @@ async def approve_trace(
         "status": trace.status,
         "decision": decision.decision,
     }
+
+
+# ---------------------------------------------------------------------------
+# v2 approval decide (T4.1)
+# ---------------------------------------------------------------------------
+class ApprovalDecideBody(BaseModel):
+    """Payload for POST /copilot/v2/approvals/{aid}/decide."""
+    decision: str = Field(..., pattern="^(approved|rejected|modified)$")
+    modifications: dict[str, Any] | None = None
+    comment: str | None = None
+
+
+@router.post("/v2/approvals/{approval_id}/decide")
+async def decide_v2_approval(
+    approval_id: UUID,
+    body: ApprovalDecideBody,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Approve, reject, or modify a sensitive tool call queued by the v2 loop.
+
+    On ``approved`` (or ``modified``) we actually run the tool via the
+    registered ToolContext and append a ``tool_call`` step to the trace,
+    so the frontend can render the result and let the LLM continue on
+    the next turn.
+
+    On ``rejected`` we skip execution and just record the decision.
+
+    Idempotent: a second decide on the same approval returns 409.
+    """
+    approval = (
+        await db.execute(select(CopilotApproval).where(CopilotApproval.id == approval_id))
+    ).scalar_one_or_none()
+    if approval is None:
+        raise HTTPException(404, "approval not found")
+    if approval.decision is not None:
+        raise HTTPException(409, f"already decided: {approval.decision}")
+
+    trace = (
+        await db.execute(select(CopilotTrace).where(CopilotTrace.id == approval.trace_id))
+    ).scalar_one_or_none()
+    if trace is None:
+        raise HTTPException(404, "trace not found")
+
+    # Org scope check
+    if user.role != "admin" and trace.org_id is not None and trace.org_id != user.org_id:
+        raise HTTPException(403, "approval belongs to another org")
+
+    # Recover the pending tool call from required_reason (JSON blob)
+    try:
+        blob = json.loads(approval.required_reason or "{}")
+    except (TypeError, ValueError):
+        blob = {}
+    tool_name = str(blob.get("tool") or "")
+    tool_args = blob.get("arguments") or {}
+    if not tool_name:
+        raise HTTPException(500, "approval has no tool metadata")
+
+    # Merge in modifications if provided
+    effective_args = dict(tool_args)
+    if body.decision == "modified" and body.modifications:
+        effective_args.update(body.modifications)
+
+    result: dict[str, Any]
+    is_error = False
+
+    if body.decision == "rejected":
+        result = {"status": "rejected", "reason": body.comment or "operator rejected"}
+    else:
+        # Execute the tool via the registry
+        from app.services.tool_registry import ToolContext, build_default_registry
+
+        registry = build_default_registry()
+        ctx = ToolContext(db=db, org_id=user.org_id, user_id=user.id)
+        try:
+            exec_result = await registry.call(tool_name, effective_args, ctx)
+            result = {"status": "executed", "output": exec_result}
+        except KeyError as exc:
+            result = {"status": "error", "error": f"unknown tool: {exc}"}
+            is_error = True
+        except Exception as exc:  # noqa: BLE001
+            result = {
+                "status": "error",
+                "error": str(exc),
+                "type": exc.__class__.__name__,
+            }
+            is_error = True
+
+    # Persist a trace step so the frontend sees the outcome
+    try:
+        # Compute idx = current max + 1
+        last_idx = (
+            await db.execute(
+                select(CopilotTraceStep.idx)
+                .where(CopilotTraceStep.trace_id == trace.id)
+                .order_by(CopilotTraceStep.idx.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none() or 0
+        step = CopilotTraceStep(
+            id=str(uuid4()),
+            trace_id=trace.id,
+            idx=last_idx + 1,
+            tool=tool_name[:60],
+            args=effective_args if isinstance(effective_args, dict) else None,
+            result=result if isinstance(result, dict) else {"raw": str(result)},
+            duration_ms=None,
+            error=(str(result.get("error")) if is_error else None),
+        )
+        db.add(step)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Finalize approval row
+    approval.decision = body.decision
+    approval.modifications = body.modifications
+    approval.comment = body.comment
+    approval.approver_id = user.id
+    approval.approved_at = datetime.now(timezone.utc)
+
+    # Update trace status
+    if body.decision == "rejected":
+        trace.status = "rejected"
+    elif is_error:
+        trace.status = "error"
+    else:
+        # Tool executed; loop is now "resumable" — caller can issue a new turn
+        trace.status = "approved"
+
+    trace.ended_at = datetime.now(timezone.utc)
+
+    await db.commit()
+
+    return {
+        "approval_id": str(approval.id),
+        "trace_id": str(trace.id),
+        "decision": body.decision,
+        "tool": tool_name,
+        "arguments": effective_args,
+        "result": result,
+        "is_error": is_error,
+    }
+
+
+@router.get("/v2/approvals/pending")
+async def list_v2_pending_approvals(
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    """List v2 pending approvals scoped to the caller's org.
+
+    Returns each approval joined with its parent trace's org_id + session_id
+    so the operator UI can render context (which session / which prompt).
+    """
+    stmt = (
+        select(CopilotApproval, CopilotTrace)
+        .join(CopilotTrace, CopilotTrace.id == CopilotApproval.trace_id)
+        .where(CopilotApproval.decision.is_(None))
+    )
+    if user.role != "admin" and user.org_id is not None:
+        stmt = stmt.where(CopilotTrace.org_id == user.org_id)
+    stmt = stmt.limit(max(1, min(limit, 200)))
+
+    rows = (await db.execute(stmt)).all()
+    out: list[dict[str, Any]] = []
+    for approval, trace in rows:
+        try:
+            blob = json.loads(approval.required_reason or "{}")
+        except (TypeError, ValueError):
+            blob = {}
+        out.append({
+            "approval_id": str(approval.id),
+            "trace_id": str(trace.id),
+            "session_id": str(trace.session_id) if trace.session_id else None,
+            "org_id": str(trace.org_id) if trace.org_id else None,
+            "tool": blob.get("tool"),
+            "arguments": blob.get("arguments"),
+            "prompt": trace.prompt,
+            "created_at": trace.started_at.isoformat() if getattr(trace, "started_at", None) else None,
+        })
+    return out
 
 
 __all__ = ["router"]

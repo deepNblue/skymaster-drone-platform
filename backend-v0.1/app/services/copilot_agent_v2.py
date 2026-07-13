@@ -43,7 +43,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -299,6 +299,7 @@ class CopilotAgentV2:
             if payload.get("is_error"):
                 error = str(payload.get("result"))
             step = CopilotTraceStep(
+                id=uuid4(),
                 trace_id=trace_id, idx=idx, tool=str(tool)[:60],
                 args=args if isinstance(args, dict) else None,
                 result=result if isinstance(result, dict) else {"raw": str(result)},
@@ -491,6 +492,7 @@ class CopilotAgentV2:
                 "session_id": str(session_id),
             }, ensure_ascii=False)
             approval = CopilotApproval(
+                id=uuid4(),
                 trace_id=trace_id,
                 required_reason=required_reason,
             )
