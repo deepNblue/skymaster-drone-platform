@@ -1,24 +1,28 @@
 'use client';
 
 /**
- * Copilot v2 dashboard page — T4.2.
+ * Copilot v2 dashboard page — T4.2 (T5.4 wires the map fly-to).
  *
- * 左侧：Copilot 会话（使用 v2 Function Calling loop）
- * 右侧：v2 敏感操作审批工作台
- *
- * 与 v1 的 /dashboard/copilot 页面并存，供逐步迁移。
+ * Layout:
+ *   ┌──────────────────────┬────────────────────────────┐
+ *   │  Copilot v2 会话     │  待审批操作 (V2ApprovalsInbox)  │
+ *   ├──────────────────────┴────────────────────────────┤
+ *   │  3D 地球（点击助理里的检测行会自动 flyTo 到目标）    │
+ *   └──────────────────────────────────────────────────┘
  */
-import React, { useState } from 'react';
-import { Row, Col, Card, Button, Space, Typography, Empty, Alert, message } from 'antd';
+import React, { useCallback, useRef, useState } from 'react';
+import { Row, Col, Card, Button, Space, Typography, Alert, message } from 'antd';
 import {
   PlusOutlined,
   RobotOutlined,
   MessageOutlined,
   ExperimentOutlined,
   EnvironmentOutlined,
+  GlobalOutlined,
 } from '@ant-design/icons';
 import CopilotV2Drawer from '@/components/CopilotV2Drawer';
 import V2ApprovalsInbox from '@/components/V2ApprovalsInbox';
+import CesiumMap from '@/components/CesiumMap';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -35,8 +39,36 @@ interface FocusedDetection {
 export default function CopilotV2Page() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [focused, setFocused] = useState<FocusedDetection | null>(null);
+  const viewerRef = useRef<any>(null);
+  // Optional: allow the map to follow a specific drone once focused.
+  const [followDrone, setFollowDrone] = useState<string | undefined>(undefined);
 
-  const contentHeight = 'calc(100vh - 96px)';
+  const handleMapReady = useCallback((v: any) => {
+    viewerRef.current = v;
+  }, []);
+
+  const flyTo = useCallback((lat: number, lng: number) => {
+    const v = viewerRef.current;
+    if (!v || v.isDestroyed?.()) return false;
+    try {
+      // CesiumMap exposes Cesium on window once the dynamic import lands.
+      const Cesium: any = (window as any).Cesium;
+      if (!Cesium) return false;
+      v.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(lng, lat, 600),
+        duration: 1.2,
+        orientation: {
+          heading: 0.0,
+          pitch: -Cesium.Math.PI_OVER_TWO / 1.5,
+          roll: 0.0,
+        },
+      });
+      return true;
+    } catch (e) {
+      console.warn('[copilot-v2] flyTo failed', e);
+      return false;
+    }
+  }, []);
 
   const handleDetectionFocus = (d: {
     id: string;
@@ -59,14 +91,25 @@ export default function CopilotV2Page() {
       confidence: d.confidence,
       at: Date.now(),
     });
-    message.success(
-      `已定位到 ${d.label} @ ${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}`,
-    );
+    if (d.drone_id) setFollowDrone(d.drone_id);
+    const ok = flyTo(d.lat, d.lng);
+    if (ok) {
+      message.success(
+        `已定位到 ${d.label} @ ${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}`,
+      );
+    } else {
+      message.info(
+        `坐标已捕获（地图未就绪）: ${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}`,
+      );
+    }
   };
+
+  const topHeight = 'calc(60vh - 60px)';
+  const mapHeight = 'calc(40vh - 24px)';
 
   return (
     <div style={{ padding: 16 }}>
-      <div style={{ marginBottom: 16 }}>
+      <div style={{ marginBottom: 12 }}>
         <Title level={4} style={{ margin: 0 }}>
           <RobotOutlined /> Copilot v2 · Function Calling · 敏感操作审批
         </Title>
@@ -75,7 +118,7 @@ export default function CopilotV2Page() {
         </Text>
       </div>
 
-      <Row gutter={16} style={{ height: contentHeight }}>
+      <Row gutter={16} style={{ height: topHeight, marginBottom: 12 }}>
         <Col span={10} style={{ height: '100%' }}>
           <Card
             title={
@@ -112,7 +155,7 @@ export default function CopilotV2Page() {
                 点击右上角<Text strong>「打开助理」</Text>进入对话界面。
               </Paragraph>
               <Paragraph type="secondary" style={{ fontSize: 12 }}>
-                v2 与 v1 的差别：v2 使用真正的 LLM 工具调用循环，可以自动组合多步工具（查设备 → 查空域 → 规划航线 → 请求批准 → 执行）；v1 使用固定规则解析意图，只做单步操作。
+                询问 "过去 30 分钟看到了什么?" — 助理会调用 Vision AI，检测行可点击定位到 3D 地球下方。
               </Paragraph>
               <Alert
                 type="info"
@@ -123,6 +166,7 @@ export default function CopilotV2Page() {
                   <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
                     <li>list_drones / get_drone — 查询无人机</li>
                     <li>list_missions — 查询任务</li>
+                    <li>list_detections / detection_stats — 视觉 AI</li>
                     <li>get_airspace / get_weather — 查空域和气象</li>
                     <li>
                       <Text type="warning" strong>
@@ -141,6 +185,30 @@ export default function CopilotV2Page() {
           <V2ApprovalsInbox />
         </Col>
       </Row>
+
+      <Card
+        size="small"
+        title={
+          <Space>
+            <GlobalOutlined />
+            <span>3D 战场态势</span>
+            {focused && (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                · 已定位 <Text code>{focused.label}</Text>
+                @ {focused.lat.toFixed(5)}, {focused.lng.toFixed(5)}
+              </Text>
+            )}
+          </Space>
+        }
+        styles={{ body: { padding: 0 } }}
+      >
+        <CesiumMap
+          droneId={followDrone}
+          height={mapHeight}
+          onReady={handleMapReady}
+          followPrimary={!!followDrone}
+        />
+      </Card>
 
       <CopilotV2Drawer
         open={drawerOpen}
@@ -193,9 +261,24 @@ export default function CopilotV2Page() {
                 {focused.lat.toFixed(5)}, {focused.lng.toFixed(5)}
               </Text>
             </div>
-            <Text type="secondary" style={{ fontSize: 11 }}>
-              （占位：地图/3D 地球集成于 T5.3 完整版接入）
-            </Text>
+            <Space size={4} style={{ marginTop: 4 }}>
+              <Button
+                size="small"
+                type="link"
+                onClick={() => flyTo(focused.lat, focused.lng)}
+              >
+                重新飞往
+              </Button>
+              {focused.drone_id && (
+                <Button
+                  size="small"
+                  type="link"
+                  onClick={() => setFollowDrone(focused.drone_id ?? undefined)}
+                >
+                  跟随无人机
+                </Button>
+              )}
+            </Space>
           </div>
         </Card>
       )}
