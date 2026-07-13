@@ -1,0 +1,48 @@
+"""Combined v1 API router."""
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+from app.api.v1 import admin, aaas, approvals, audit_export, auth, auth_2fa, auth_events, auth_reset, auth_sessions, auth_sso, ciio, community, compliance, copilot, crypto_sm2, drones, geofence, health, missions, officers, preflight, remoteid, scene_job, scene_marketplace, scene_moderation, scenes, scenes_artifacts, scenes_upload, sim, streams, trajectory, uom, video_streams, vision_copilot as vc_router, websocket
+from app.services.metrics import router as metrics_router
+
+api_router = APIRouter()
+api_router.include_router(health.router)
+api_router.include_router(auth.router)
+api_router.include_router(auth_2fa.router)
+api_router.include_router(auth_sso.router)
+api_router.include_router(auth_events.router)
+api_router.include_router(auth_reset.router)
+api_router.include_router(auth_sessions.router)
+api_router.include_router(approvals.router)
+api_router.include_router(aaas.router)
+api_router.include_router(crypto_sm2.router)
+api_router.include_router(audit_export.router)
+api_router.include_router(ciio.router)
+api_router.include_router(scenes.router)
+api_router.include_router(scenes_upload.router)
+api_router.include_router(scenes_artifacts.router)
+api_router.include_router(scene_marketplace.router)
+api_router.include_router(scene_moderation.router)
+api_router.include_router(scene_job.router)
+api_router.include_router(video_streams.router)
+api_router.include_router(compliance.router)
+api_router.include_router(officers.router)
+api_router.include_router(vc_router.vision_router)
+api_router.include_router(vc_router.copilot_router)
+api_router.include_router(drones.router)
+api_router.include_router(missions.router)
+api_router.include_router(streams.router)
+api_router.include_router(websocket.router)
+api_router.include_router(copilot.router)
+api_router.include_router(sim.router)
+api_router.include_router(trajectory.router)
+api_router.include_router(uom.router)
+api_router.include_router(preflight.router)
+api_router.include_router(geofence.router)
+api_router.include_router(remoteid.router)
+api_router.include_router(community.router)
+api_router.include_router(admin.router)
+api_router.include_router(metrics_router)
+
+__all__ = ["api_router"]
