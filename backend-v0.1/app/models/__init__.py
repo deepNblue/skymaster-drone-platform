@@ -4,7 +4,7 @@ from app.models.active_session import ActiveSession
 from app.models.backup_code import BackupCode
 from app.models.flight_approval import FlightApproval, FlightApprovalAuthority
 from app.models.vision_copilot import VisionDetection, CopilotSessionV2, CopilotTurnV2
-from app.models.community import CommunityPost, CommunityComment
+from app.models.community import CommunityPost, CommunityComment, CommunityReport
 from app.models.aaas import AaasClient, AaasDelivery
 from app.models.video_stream import VideoStream, VideoStreamProbe
 from app.models.model_marketplace import (

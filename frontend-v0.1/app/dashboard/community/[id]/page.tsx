@@ -27,6 +27,8 @@ import {
   Spin,
   Divider,
   Avatar,
+  Modal,
+  Select,
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -35,12 +37,16 @@ import {
   EyeOutlined,
   UserOutlined,
   SendOutlined,
+  FlagOutlined,
 } from '@ant-design/icons';
 import {
   getCommunityPost,
   listCommunityComments,
   createCommunityComment,
   likeCommunityPost,
+  reportPost,
+  REPORT_REASONS,
+  ReportReason,
   CommunityPost,
   CommunityComment,
   ModerationStatus,
@@ -65,6 +71,10 @@ export default function CommunityPostPage() {
   const [loading, setLoading] = useState(true);
   const [reply, setReply] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState<ReportReason>('spam');
+  const [reportNote, setReportNote] = useState('');
+  const [reporting, setReporting] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -224,6 +234,13 @@ export default function CommunityPostPage() {
           >
             复制链接
           </Button>
+          <Button
+            icon={<FlagOutlined />}
+            danger
+            onClick={() => setReportOpen(true)}
+          >
+            举报
+          </Button>
         </Space>
       </Card>
 
@@ -285,6 +302,69 @@ export default function CommunityPostPage() {
           </Button>
         </div>
       </Card>
+
+      <Modal
+        title="举报此帖"
+        open={reportOpen}
+        onCancel={() => setReportOpen(false)}
+        okText="提交举报"
+        okButtonProps={{ danger: true, loading: reporting }}
+        onOk={async () => {
+          if (!post) return;
+          setReporting(true);
+          try {
+            await reportPost(post.id, {
+              reason: reportReason,
+              note: reportNote || undefined,
+            });
+            message.success('举报已提交，管理员将尽快处理');
+            setReportOpen(false);
+            setReportNote('');
+          } catch (e: any) {
+            const d = e?.response?.data?.detail;
+            if (e?.response?.status === 409) {
+              message.warning('你已经举报过这个帖子了');
+              setReportOpen(false);
+            } else if (e?.response?.status === 400) {
+              message.error('不能举报自己发布的帖子');
+            } else {
+              message.error(`举报失败: ${d ?? e.message}`);
+            }
+          } finally {
+            setReporting(false);
+          }
+        }}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            所有举报由管理员人工复核。恶意/重复举报可能影响你的账号信誉。
+          </Text>
+          <div>
+            <Text strong>举报原因</Text>
+            <Select
+              style={{ width: '100%', marginTop: 4 }}
+              value={reportReason}
+              onChange={setReportReason}
+              options={REPORT_REASONS.map((r) => ({
+                value: r.value,
+                label: r.label,
+              }))}
+            />
+          </div>
+          <div>
+            <Text strong>补充说明（可选）</Text>
+            <Input.TextArea
+              rows={3}
+              maxLength={1000}
+              showCount
+              placeholder="补充违规细节、时间戳、上下文等，帮助管理员判断"
+              value={reportNote}
+              onChange={(e) => setReportNote(e.target.value)}
+              style={{ marginTop: 4 }}
+            />
+          </div>
+        </Space>
+      </Modal>
     </div>
   );
 }

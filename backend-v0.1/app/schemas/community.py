@@ -59,3 +59,41 @@ class CommentOut(BaseModel):
 class ModerationDecision(BaseModel):
     action: Literal["approve", "reject", "archive"]
     reason: str | None = None
+
+
+REPORT_REASONS = (
+    "spam", "harassment", "misinformation", "illegal", "porn",
+    "violence", "off_topic", "other",
+)
+
+
+class ReportCreate(BaseModel):
+    reason: Literal[
+        "spam", "harassment", "misinformation", "illegal", "porn",
+        "violence", "off_topic", "other",
+    ]
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class ReportOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    post_id: UUID
+    reporter_id: UUID | None
+    reason: str
+    note: str | None
+    status: str
+    resolved_by: UUID | None
+    resolved_at: datetime | None
+    created_at: datetime
+
+
+class ReportResolve(BaseModel):
+    action: Literal["resolve", "dismiss"]
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class ReportList(BaseModel):
+    total: int
+    items: list[ReportOut]

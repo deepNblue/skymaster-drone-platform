@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.deps import get_current_user
-from app.models.community import CommunityComment, CommunityPost
+from app.models.community import CommunityComment, CommunityPost, CommunityReport
 from app.models.user import User
 from app.schemas.community import (
     CommentCreate,
@@ -33,6 +33,10 @@ from app.schemas.community import (
     PostCreate,
     PostList,
     PostOut,
+    ReportCreate,
+    ReportList,
+    ReportOut,
+    ReportResolve,
 )
 from app.services.community_moderation import moderate_post, moderate_text
 
@@ -243,3 +247,122 @@ async def moderate_decision(
     post.moderation_reason = payload.reason or None
     await db.commit()
     return PostOut.model_validate(post)
+
+
+# ---------------------------------------------------------------------------
+# User-driven reporting (T6.5)
+# ---------------------------------------------------------------------------
+@router.post(
+    "/posts/{pid}/report",
+    response_model=ReportOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def report_post(
+    pid: UUID,
+    payload: ReportCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ReportOut:
+    """Submit a report against a post. One report per (post, reporter).
+
+    A second call by the same reporter returns 409 rather than silently
+    dropping — that keeps the UI honest ("you already reported this").
+    """
+    post = (
+        await db.execute(select(CommunityPost).where(CommunityPost.id == pid))
+    ).scalar_one_or_none()
+    if not post:
+        raise HTTPException(status_code=404, detail="post not found")
+
+    # Don't allow self-report (nice-to-have; avoids trivially clearing
+    # your own post from public feeds).
+    if post.author_id and post.author_id == user.id:
+        raise HTTPException(status_code=400, detail="cannot report your own post")
+
+    dup = (
+        await db.execute(
+            select(CommunityReport).where(
+                (CommunityReport.post_id == pid)
+                & (CommunityReport.reporter_id == user.id)
+            )
+        )
+    ).scalar_one_or_none()
+    if dup is not None:
+        raise HTTPException(status_code=409, detail="already reported")
+
+    report = CommunityReport(
+        post_id=pid,
+        reporter_id=user.id,
+        reason=payload.reason,
+        note=payload.note,
+        status="open",
+    )
+    db.add(report)
+    await db.commit()
+    return ReportOut.model_validate(report)
+
+
+@router.get("/moderation/reports", response_model=ReportList)
+async def list_reports(
+    status_filter: str | None = Query(None, alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ReportList:
+    """Admin queue of pending reports."""
+    _require_admin(user)
+    stmt = select(CommunityReport)
+    if status_filter:
+        stmt = stmt.where(CommunityReport.status == status_filter)
+    else:
+        stmt = stmt.where(CommunityReport.status == "open")
+    total = (
+        await db.execute(select(func.count()).select_from(stmt.subquery()))
+    ).scalar_one()
+    stmt = (
+        stmt.order_by(CommunityReport.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    return ReportList(
+        total=total,
+        items=[ReportOut.model_validate(r) for r in rows],
+    )
+
+
+@router.post(
+    "/moderation/reports/{rid}/resolve",
+    response_model=ReportOut,
+)
+async def resolve_report(
+    rid: UUID,
+    payload: ReportResolve,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ReportOut:
+    """Admin resolves an open report. Note is appended to report.note."""
+    from datetime import datetime, timezone
+
+    _require_admin(user)
+    report = (
+        await db.execute(
+            select(CommunityReport).where(CommunityReport.id == rid)
+        )
+    ).scalar_one_or_none()
+    if not report:
+        raise HTTPException(status_code=404, detail="report not found")
+    if report.status != "open":
+        raise HTTPException(status_code=409, detail="report already resolved")
+    report.status = "resolved" if payload.action == "resolve" else "dismissed"
+    report.resolved_by = user.id
+    report.resolved_at = datetime.now(timezone.utc)
+    if payload.note:
+        prefix = f"[admin@{user.id}] "
+        report.note = (
+            f"{report.note}\n{prefix}{payload.note}"
+            if report.note else f"{prefix}{payload.note}"
+        )
+    await db.commit()
+    return ReportOut.model_validate(report)

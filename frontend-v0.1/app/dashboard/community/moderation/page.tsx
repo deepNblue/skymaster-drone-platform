@@ -31,6 +31,7 @@ import {
   CheckOutlined,
   CloseOutlined,
   InboxOutlined,
+  FlagOutlined,
 } from '@ant-design/icons';
 import {
   fetchModerationQueue,
@@ -133,6 +134,14 @@ export default function CommunityModerationPage() {
         onClick={() => router.push('/dashboard/community')}
       >
         返回社区
+      </Button>
+      <Button
+        type="link"
+        icon={<FlagOutlined />}
+        style={{ marginBottom: 8, marginLeft: 8 }}
+        onClick={() => router.push('/dashboard/community/moderation/reports')}
+      >
+        用户举报队列
       </Button>
 
       <div style={{ marginBottom: 12 }}>

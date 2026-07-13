@@ -113,3 +113,61 @@ export async function moderateCommunityPost(
   );
   return data as CommunityPost;
 }
+
+// ---- T6.5 Reporting ------------------------------------------------------
+
+export const REPORT_REASONS = [
+  { value: 'spam', label: '垃圾/广告' },
+  { value: 'harassment', label: '骚扰/攻击' },
+  { value: 'misinformation', label: '虚假信息' },
+  { value: 'illegal', label: '违法违规' },
+  { value: 'porn', label: '色情' },
+  { value: 'violence', label: '暴力' },
+  { value: 'off_topic', label: '偏离主题' },
+  { value: 'other', label: '其他' },
+] as const;
+
+export type ReportReason = typeof REPORT_REASONS[number]['value'];
+
+export interface ReportOut {
+  id: string;
+  post_id: string;
+  reporter_id: string | null;
+  reason: string;
+  note: string | null;
+  status: 'open' | 'resolved' | 'dismissed';
+  resolved_by: string | null;
+  resolved_at: string | null;
+  created_at: string;
+}
+
+export async function reportPost(
+  pid: string,
+  body: { reason: ReportReason; note?: string },
+): Promise<ReportOut> {
+  const { data } = await api.post(
+    `/api/v1/community/posts/${pid}/report`,
+    body,
+  );
+  return data as ReportOut;
+}
+
+export async function listOpenReports(): Promise<{
+  total: number;
+  items: ReportOut[];
+}> {
+  const { data } = await api.get('/api/v1/community/moderation/reports');
+  return data;
+}
+
+export async function resolveReport(
+  rid: string,
+  action: 'resolve' | 'dismiss',
+  note?: string,
+): Promise<ReportOut> {
+  const { data } = await api.post(
+    `/api/v1/community/moderation/reports/${rid}/resolve`,
+    { action, note },
+  );
+  return data as ReportOut;
+}
