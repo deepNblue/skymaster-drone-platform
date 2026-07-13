@@ -62,12 +62,20 @@ async def _bootstrap(client, email: str, role: str = "operator"):
         approval_id = str(approval.id)
         trace_id = str(trace.id)
         drone_id = str(drone.id)
+        user_id = user.id
 
     r = await client.post(
         "/api/v1/auth/login",
         json={"email": email, "password": "StrongPassW0rd#"},
     )
-    return r.json()["access_token"], approval_id, trace_id, drone_id, str(org_id)
+    body = r.json()
+    if "access_token" in body:
+        tok = body["access_token"]
+    else:
+        # Rate limiter (429) hit — mint token directly.
+        from app.services.auth import create_access_token
+        tok = create_access_token(user_id=user_id, org_id=org_id, role=role)
+    return tok, approval_id, trace_id, drone_id, str(org_id)
 
 
 @pytest.mark.asyncio

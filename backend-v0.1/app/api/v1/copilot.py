@@ -583,7 +583,6 @@ async def decide_v2_approval(
             )
         ).scalar_one_or_none() or 0
         step = CopilotTraceStep(
-            id=str(uuid4()),
             trace_id=trace.id,
             idx=last_idx + 1,
             tool=tool_name[:60],

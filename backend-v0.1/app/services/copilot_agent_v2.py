@@ -299,7 +299,6 @@ class CopilotAgentV2:
             if payload.get("is_error"):
                 error = str(payload.get("result"))
             step = CopilotTraceStep(
-                id=uuid4(),
                 trace_id=trace_id, idx=idx, tool=str(tool)[:60],
                 args=args if isinstance(args, dict) else None,
                 result=result if isinstance(result, dict) else {"raw": str(result)},
