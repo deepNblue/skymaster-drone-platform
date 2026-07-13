@@ -102,6 +102,7 @@ async def client() -> AsyncClient:
             revoked_token, media_asset,
             flight_approval, vision_copilot, aaas, video_stream, model_marketplace,
             scene, scene_marketplace, scene_moderation, scene_job,
+            community,
         )
         try:
             async with engine.begin() as conn:

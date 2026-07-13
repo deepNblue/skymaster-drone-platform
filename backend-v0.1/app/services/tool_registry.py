@@ -22,6 +22,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.drone import Drone
 from app.models.mission import Mission
 from app.models.vision_copilot import VisionDetection
+from app.models.community import CommunityPost
+from app.models.model_marketplace import (
+    ModelDeployment, ModelListing, ModelUsageEvent, ModelVersion,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +119,18 @@ class ListDetectionsArgs(BaseModel):
         description="Only include detections created in the last N minutes",
     )
     limit: int = Field(20, ge=1, le=200, description="Max rows to return")
+
+
+# --- v2.0 §3.16/3.18 Copilot integrations --------------------------------
+class ListInstalledModelsArgs(BaseModel):
+    """No arguments — lists model deployments installed by the current org."""
+
+
+class SearchCommunityArgs(BaseModel):
+    query: str = Field(..., min_length=1, max_length=64,
+                       description="Case-insensitive substring to search in "
+                                   "post titles + bodies")
+    limit: int = Field(10, ge=1, le=50)
 
 
 class DetectionStatsArgs(BaseModel):
@@ -385,6 +401,82 @@ async def list_detections(
     }
 
 
+# ---------------------------------------------------------------------------
+# v2.0 §3.16 Model Marketplace tools
+# ---------------------------------------------------------------------------
+async def list_installed_models(
+    ctx: ToolContext, args: ListInstalledModelsArgs,
+) -> dict[str, Any]:
+    """Return the model deployments installed by the current org."""
+    if ctx.db is None or ctx.org_id is None:
+        return {"deployments": [], "reason": "no db or org"}
+    stmt = (
+        select(ModelDeployment, ModelListing, ModelVersion)
+        .join(ModelListing, ModelListing.id == ModelDeployment.listing_id)
+        .join(ModelVersion, ModelVersion.id == ModelDeployment.version_id)
+        .where(ModelDeployment.org_id == ctx.org_id)
+        .order_by(ModelDeployment.installed_at.desc())
+        .limit(50)
+    )
+    rows = (await ctx.db.execute(stmt)).all()
+    return {
+        "count": len(rows),
+        "deployments": [
+            {
+                "deployment_id": str(dep.id),
+                "model_name": listing.name,
+                "slug": listing.slug,
+                "task": listing.task,
+                "version": ver.version,
+                "status": dep.status,
+                "quota_per_day": dep.quota_calls_per_day,
+                "installed_at": dep.installed_at.isoformat()
+                if dep.installed_at else None,
+            }
+            for dep, listing, ver in rows
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# v2.0 §3.18 Community tools
+# ---------------------------------------------------------------------------
+async def search_community(
+    ctx: ToolContext, args: SearchCommunityArgs,
+) -> dict[str, Any]:
+    """Search approved community posts by keyword. Read-only, tenant-aware."""
+    if ctx.db is None:
+        return {"posts": [], "reason": "no db"}
+    q = f"%{args.query.strip()}%"
+    stmt = select(CommunityPost).where(
+        CommunityPost.moderation_status == "approved"
+    ).where(
+        (CommunityPost.title.ilike(q)) | (CommunityPost.body.ilike(q))
+    )
+    if ctx.org_id is not None:
+        stmt = stmt.where(
+            (CommunityPost.tenant_id.is_(None))
+            | (CommunityPost.tenant_id == ctx.org_id)
+        )
+    stmt = stmt.order_by(CommunityPost.created_at.desc()).limit(args.limit)
+    rows = (await ctx.db.execute(stmt)).scalars().all()
+    return {
+        "count": len(rows),
+        "posts": [
+            {
+                "id": str(p.id),
+                "title": p.title,
+                "snippet": (p.body[:200] + "…") if len(p.body) > 200 else p.body,
+                "tags": p.tags or [],
+                "like_count": p.like_count,
+                "comment_count": p.comment_count,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            }
+            for p in rows
+        ],
+    }
+
+
 async def detection_stats(
     ctx: ToolContext, args: DetectionStatsArgs,
 ) -> dict[str, Any]:
@@ -583,6 +675,34 @@ def build_default_registry() -> ToolRegistry:
             func=detection_stats,  # type: ignore[arg-type]
         )
     )
+    # ---- v2.0 §3.16 Model Marketplace ----------------------------------
+    r.register(
+        ToolSpec(
+            name="list_installed_models",
+            description=(
+                "List the AI/vision models this org has installed from the "
+                "Model Marketplace. Includes model name, task, active version, "
+                "and daily call quota. Read-only. Use when the user asks "
+                "'what models can I use?' or 'do we have a person detection model?'"
+            ),
+            args_schema=ListInstalledModelsArgs,
+            func=list_installed_models,  # type: ignore[arg-type]
+        )
+    )
+    # ---- v2.0 §3.18 Community ------------------------------------------
+    r.register(
+        ToolSpec(
+            name="search_community",
+            description=(
+                "Search approved community posts by keyword. Returns id, "
+                "title, tag list, and a short snippet — the operator can "
+                "then open the full post. Read-only. Use when the user asks "
+                "'has anyone written about X?' or 'search the community for Y'."
+            ),
+            args_schema=SearchCommunityArgs,
+            func=search_community,  # type: ignore[arg-type]
+        )
+    )
     return r
 
 
@@ -602,4 +722,6 @@ __all__ = [
     "abort_mission",
     "list_detections",
     "detection_stats",
+    "list_installed_models",
+    "search_community",
 ]
