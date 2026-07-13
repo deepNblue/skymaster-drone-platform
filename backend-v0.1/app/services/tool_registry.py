@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.drone import Drone
 from app.models.mission import Mission
+from app.models.vision_copilot import VisionDetection
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +90,41 @@ class DispatchMissionArgs(BaseModel):
 class AbortMissionArgs(BaseModel):
     mission_id: str = Field(..., description="UUID of the mission to abort")
     reason: str | None = Field(None, description="Optional reason for the abort")
+
+
+# --- Vision AI query tools (T5.0) ------------------------------------------
+# All readonly. Let Copilot v2 answer questions like
+# "最近有没有识别到人?" / "D1 过去 10 分钟看到了什么?"
+
+class ListDetectionsArgs(BaseModel):
+    drone_id: str | None = Field(
+        None, description="Optional UUID filter — restrict to a single drone"
+    )
+    mission_id: str | None = Field(
+        None, description="Optional UUID filter — restrict to a single mission"
+    )
+    label: str | None = Field(
+        None, description="Optional class label filter (e.g. 'person', 'vehicle')"
+    )
+    min_confidence: float | None = Field(
+        None, ge=0.0, le=1.0,
+        description="Minimum confidence in [0,1]; None means no lower bound",
+    )
+    since_minutes: int | None = Field(
+        None, ge=1, le=1440,
+        description="Only include detections created in the last N minutes",
+    )
+    limit: int = Field(20, ge=1, le=200, description="Max rows to return")
+
+
+class DetectionStatsArgs(BaseModel):
+    drone_id: str | None = Field(
+        None, description="Optional UUID filter — restrict to a single drone"
+    )
+    since_minutes: int = Field(
+        60, ge=1, le=1440,
+        description="Aggregate over the trailing N minutes (default 60)",
+    )
 
 
 
@@ -292,6 +328,92 @@ async def abort_mission(
     return {"ok": True, "mission_id": str(mission.id), "status": mission.status, "reason": args.reason}
 
 
+# ---------------------------------------------------------------------------
+# Vision AI tools (T5.0)
+# ---------------------------------------------------------------------------
+async def list_detections(
+    ctx: ToolContext, args: ListDetectionsArgs,
+) -> dict[str, Any]:
+    """Return recent vision detections filtered by drone / mission / label."""
+    if ctx.db is None:
+        return {"detections": [], "reason": "no db session"}
+    from datetime import datetime, timedelta, timezone
+
+    stmt = select(VisionDetection)
+    if ctx.org_id is not None:
+        stmt = stmt.where(VisionDetection.tenant_id == ctx.org_id)
+    if args.drone_id:
+        try:
+            stmt = stmt.where(VisionDetection.drone_id == UUID(args.drone_id))
+        except ValueError:
+            return {"detections": [], "reason": "invalid drone_id"}
+    if args.mission_id:
+        try:
+            stmt = stmt.where(VisionDetection.mission_id == UUID(args.mission_id))
+        except ValueError:
+            return {"detections": [], "reason": "invalid mission_id"}
+    if args.label:
+        stmt = stmt.where(VisionDetection.label == args.label)
+    if args.min_confidence is not None:
+        stmt = stmt.where(VisionDetection.confidence >= args.min_confidence)
+    if args.since_minutes is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=args.since_minutes)
+        stmt = stmt.where(VisionDetection.created_at >= cutoff)
+    stmt = stmt.order_by(VisionDetection.created_at.desc()).limit(args.limit)
+    rows = (await ctx.db.execute(stmt)).scalars().all()
+    return {
+        "count": len(rows),
+        "detections": [
+            {
+                "id": str(d.id),
+                "drone_id": str(d.drone_id) if d.drone_id else None,
+                "mission_id": str(d.mission_id) if d.mission_id else None,
+                "label": d.label,
+                "confidence": d.confidence,
+                "bbox": d.bbox,
+                "stream_key": d.stream_key,
+                "model_tag": d.model_tag,
+                "runtime": d.runtime,
+                "status": d.status,
+                "created_at": d.created_at.isoformat() if d.created_at else None,
+            }
+            for d in rows
+        ],
+    }
+
+
+async def detection_stats(
+    ctx: ToolContext, args: DetectionStatsArgs,
+) -> dict[str, Any]:
+    """Aggregate detection counts by label over the trailing N minutes."""
+    if ctx.db is None:
+        return {"by_label": {}, "reason": "no db session"}
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import func
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=args.since_minutes)
+    stmt = select(
+        VisionDetection.label, func.count(VisionDetection.id)
+    ).where(VisionDetection.created_at >= cutoff)
+    if ctx.org_id is not None:
+        stmt = stmt.where(VisionDetection.tenant_id == ctx.org_id)
+    if args.drone_id:
+        try:
+            stmt = stmt.where(VisionDetection.drone_id == UUID(args.drone_id))
+        except ValueError:
+            return {"by_label": {}, "reason": "invalid drone_id"}
+    stmt = stmt.group_by(VisionDetection.label)
+    rows = (await ctx.db.execute(stmt)).all()
+    by_label = {row[0]: int(row[1]) for row in rows}
+    total = sum(by_label.values())
+    top_label = max(by_label, key=by_label.get) if by_label else None
+    return {
+        "since_minutes": args.since_minutes,
+        "total": total,
+        "by_label": by_label,
+        "top_label": top_label,
+    }
+
 
 # ---------------------------------------------------------------------------
 # Registry
@@ -433,6 +555,31 @@ def build_default_registry() -> ToolRegistry:
             permission="sensitive",
         )
     )
+    # ---- Vision AI query tools (T5.0) --------------------------------
+    r.register(
+        ToolSpec(
+            name="list_detections",
+            description=(
+                "List recent vision AI detections, optionally filtered by drone, "
+                "mission, label (e.g. 'person'), min_confidence, or trailing "
+                "since_minutes window. Read-only, tenant-scoped."
+            ),
+            args_schema=ListDetectionsArgs,
+            func=list_detections,  # type: ignore[arg-type]
+        )
+    )
+    r.register(
+        ToolSpec(
+            name="detection_stats",
+            description=(
+                "Aggregate vision AI detection counts by class label over a "
+                "trailing time window (default 60 min). Read-only. Use when the "
+                "user asks 'how many people/vehicles have we seen recently?'"
+            ),
+            args_schema=DetectionStatsArgs,
+            func=detection_stats,  # type: ignore[arg-type]
+        )
+    )
     return r
 
 
@@ -450,4 +597,6 @@ __all__ = [
     "create_mission",
     "dispatch_mission",
     "abort_mission",
+    "list_detections",
+    "detection_stats",
 ]
