@@ -37,6 +37,7 @@ import {
   decideV2Approval,
   CopilotV2Event,
 } from '@/lib/copilot_v2';
+import VisionToolResult from './VisionToolResult';
 
 const { Text, Paragraph } = Typography;
 
@@ -424,33 +425,45 @@ function MessageBubble({ msg, onDecide }: BubbleProps) {
         {/* Tool steps */}
         {msg.steps && msg.steps.length > 0 && (
           <div style={{ marginTop: 6 }}>
-            {msg.steps.map((s) => (
-              <div key={s.id} style={{ fontSize: 12, opacity: 0.8 }}>
-                <ToolOutlined style={{ marginRight: 4 }} />
-                <Tag
-                  color={
-                    s.event === 'error'
-                      ? 'red'
-                      : s.event === 'end'
-                        ? 'green'
-                        : 'blue'
-                  }
-                  style={{ fontSize: 11 }}
-                >
-                  {s.name}
-                </Tag>
-                {s.result && (
-                  <Text
-                    type="secondary"
-                    style={{ fontSize: 11 }}
-                    code
-                    ellipsis={{ tooltip: JSON.stringify(s.result) }}
-                  >
-                    {JSON.stringify(s.result).slice(0, 60)}
-                  </Text>
-                )}
-              </div>
-            ))}
+            {msg.steps.map((s) => {
+              const vision =
+                s.event === 'end' && s.result
+                  ? (s.name === 'list_detections' ||
+                      s.name === 'detection_stats')
+                  : false;
+              return (
+                <div key={s.id} style={{ fontSize: 12, opacity: 0.85 }}>
+                  <div>
+                    <ToolOutlined style={{ marginRight: 4 }} />
+                    <Tag
+                      color={
+                        s.event === 'error'
+                          ? 'red'
+                          : s.event === 'end'
+                            ? 'green'
+                            : 'blue'
+                      }
+                      style={{ fontSize: 11 }}
+                    >
+                      {s.name}
+                    </Tag>
+                    {!vision && s.result && (
+                      <Text
+                        type="secondary"
+                        style={{ fontSize: 11 }}
+                        code
+                        ellipsis={{ tooltip: JSON.stringify(s.result) }}
+                      >
+                        {JSON.stringify(s.result).slice(0, 60)}
+                      </Text>
+                    )}
+                  </div>
+                  {vision && (
+                    <VisionToolResult name={s.name} result={s.result} />
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
 
