@@ -17,6 +17,8 @@ from ..core.devices.manager import DeviceManager, DroneDevice, DeviceStatus
 from ..core.mavlink.connector import DroneType, DroneConfig, TelemetryData
 from ..core.missions.planner import MissionPlanner, Mission, MissionType, Waypoint, WaypointType, Position
 from ..core.swarm.controller import SwarmController, SwarmConfig, FormationType, SwarmState
+from ..core.safety.safety_manager import SafetyManager
+from .safety import router as safety_router, init_safety_manager, start_safety_manager, stop_safety_manager
 
 # 配置日志
 logging.basicConfig(
@@ -45,6 +47,7 @@ app.add_middleware(
 device_manager: Optional[DeviceManager] = None
 mission_planner: Optional[MissionPlanner] = None
 swarm_controller: Optional[SwarmController] = None
+safety_manager: Optional[SafetyManager] = None
 websocket_manager: Optional['WebSocketManager'] = None
 
 
@@ -172,7 +175,7 @@ class WebSocketManager:
 @app.on_event("startup")
 async def startup_event():
     """应用启动"""
-    global device_manager, mission_planner, swarm_controller, websocket_manager
+    global device_manager, mission_planner, swarm_controller, websocket_manager, safety_manager
     
     logger.info("Starting SkyMaster API...")
     
@@ -182,12 +185,19 @@ async def startup_event():
     swarm_controller = SwarmController(device_manager)
     websocket_manager = WebSocketManager()
     
+    # 初始化安全管理器
+    safety_manager = init_safety_manager()
+    
     # 添加遥测回调
     device_manager.add_telemetry_callback(on_telemetry_update)
     
     # 启动服务
     await device_manager.start()
     await swarm_controller.start()
+    await start_safety_manager()
+    
+    # 注册安全路由
+    app.include_router(safety_router)
     
     logger.info("SkyMaster API started successfully")
 
@@ -195,10 +205,11 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """应用关闭"""
-    global device_manager, swarm_controller
+    global device_manager, swarm_controller, safety_manager
     
     logger.info("Shutting down SkyMaster API...")
     
+    await stop_safety_manager()
     await swarm_controller.stop()
     await device_manager.stop()
     

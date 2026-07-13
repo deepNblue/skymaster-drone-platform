@@ -66,3 +66,6 @@ logs/
 secrets/
 *.pem
 *.key
+-e 
+# Test cache
+.pytest_cache/
