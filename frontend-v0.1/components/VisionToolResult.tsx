@@ -15,6 +15,7 @@ import {
   EyeOutlined,
   BarChartOutlined,
   ClockCircleOutlined,
+  EnvironmentOutlined,
 } from '@ant-design/icons';
 
 const { Text } = Typography;
@@ -54,6 +55,9 @@ interface DetectionRow {
   label: string;
   confidence: number;
   bbox: number[] | null;
+  lat?: number | null;
+  lng?: number | null;
+  alt_m?: number | null;
   stream_key: string | null;
   model_tag: string | null;
   runtime: string | null;
@@ -78,6 +82,19 @@ interface DetectionStatsResult {
 export interface VisionToolResultProps {
   name: 'list_detections' | 'detection_stats' | string;
   result: any;
+  /**
+   * Optional click handler: fires when the operator taps a detection row
+   * in the list_detections view. Parent (drawer / dashboard) can use
+   * this to fly a map / 3D globe to the detection's lat-lng.
+   */
+  onDetectionClick?: (d: {
+    id: string;
+    drone_id: string | null;
+    lat?: number | null;
+    lng?: number | null;
+    label: string;
+    confidence: number;
+  }) => void;
 }
 
 /**
@@ -88,11 +105,17 @@ export interface VisionToolResultProps {
 export default function VisionToolResult({
   name,
   result,
+  onDetectionClick,
 }: VisionToolResultProps): React.ReactElement | null {
   if (!result || typeof result !== 'object') return null;
 
   if (name === 'list_detections') {
-    return <ListDetectionsView data={result as ListDetectionsResult} />;
+    return (
+      <ListDetectionsView
+        data={result as ListDetectionsResult}
+        onDetectionClick={onDetectionClick}
+      />
+    );
   }
   if (name === 'detection_stats') {
     return <DetectionStatsView data={result as DetectionStatsResult} />;
@@ -103,7 +126,13 @@ export default function VisionToolResult({
 // ---------------------------------------------------------------------------
 // list_detections view
 // ---------------------------------------------------------------------------
-function ListDetectionsView({ data }: { data: ListDetectionsResult }) {
+function ListDetectionsView({
+  data,
+  onDetectionClick,
+}: {
+  data: ListDetectionsResult;
+  onDetectionClick?: VisionToolResultProps['onDetectionClick'];
+}) {
   const rows = data.detections || [];
   const empty = rows.length === 0;
   return (
@@ -137,7 +166,11 @@ function ListDetectionsView({ data }: { data: ListDetectionsResult }) {
       ) : (
         <div style={{ marginTop: 6 }}>
           {rows.slice(0, 8).map((r) => (
-            <DetectionRowView key={r.id} row={r} />
+            <DetectionRowView
+              key={r.id}
+              row={r}
+              onClick={onDetectionClick}
+            />
           ))}
           {rows.length > 8 && (
             <Text type="secondary" style={{ fontSize: 11 }}>
@@ -150,7 +183,13 @@ function ListDetectionsView({ data }: { data: ListDetectionsResult }) {
   );
 }
 
-function DetectionRowView({ row }: { row: DetectionRow }) {
+function DetectionRowView({
+  row,
+  onClick,
+}: {
+  row: DetectionRow;
+  onClick?: VisionToolResultProps['onDetectionClick'];
+}) {
   const conf = (row.confidence * 100).toFixed(1);
   const confColor =
     row.confidence >= 0.85
@@ -158,15 +197,51 @@ function DetectionRowView({ row }: { row: DetectionRow }) {
       : row.confidence >= 0.7
         ? 'processing'
         : 'default';
+  const hasCoords = row.lat != null && row.lng != null;
+  const clickable = !!onClick && hasCoords;
   return (
     <div
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={
+        clickable
+          ? () =>
+              onClick!({
+                id: row.id,
+                drone_id: row.drone_id,
+                lat: row.lat,
+                lng: row.lng,
+                label: row.label,
+                confidence: row.confidence,
+              })
+          : undefined
+      }
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: 6,
         fontSize: 12,
         lineHeight: 1.8,
+        cursor: clickable ? 'pointer' : 'default',
+        padding: clickable ? '2px 4px' : 0,
+        borderRadius: 4,
+        transition: 'background 0.15s',
       }}
+      onMouseEnter={(e) => {
+        if (clickable) {
+          (e.currentTarget as HTMLElement).style.background = '#e6f4ff';
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (clickable) {
+          (e.currentTarget as HTMLElement).style.background = 'transparent';
+        }
+      }}
+      title={
+        clickable
+          ? `点击在地图上定位 (${row.lat!.toFixed(5)}, ${row.lng!.toFixed(5)})`
+          : undefined
+      }
     >
       <Tag color={labelColor(row.label)} style={{ fontSize: 11, margin: 0 }}>
         {row.label}
@@ -181,6 +256,11 @@ function DetectionRowView({ row }: { row: DetectionRow }) {
       )}
       {row.status && row.status !== 'new' && (
         <Tag style={{ fontSize: 11, margin: 0 }}>{row.status}</Tag>
+      )}
+      {hasCoords && (
+        <EnvironmentOutlined
+          style={{ fontSize: 11, color: clickable ? '#1677ff' : '#bfbfbf' }}
+        />
       )}
       <Text
         type="secondary"

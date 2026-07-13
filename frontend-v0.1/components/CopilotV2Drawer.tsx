@@ -73,11 +73,28 @@ export interface V2Message {
 export interface CopilotV2DrawerProps {
   open: boolean;
   onClose: () => void;
+  /**
+   * Optional callback fired when the operator clicks a vision detection
+   * row in a tool result. The parent page can use this to fly the map
+   * to the drone / detection lat-lng and briefly highlight it.
+   */
+  onDetectionFocus?: (d: {
+    id: string;
+    drone_id: string | null;
+    lat?: number | null;
+    lng?: number | null;
+    label: string;
+    confidence: number;
+  }) => void;
 }
 
 const HEADER_GRADIENT = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
 
-export default function CopilotV2Drawer({ open, onClose }: CopilotV2DrawerProps) {
+export default function CopilotV2Drawer({
+  open,
+  onClose,
+  onDetectionFocus,
+}: CopilotV2DrawerProps) {
   const [messages, setMessages] = useState<V2Message[]>([
     {
       id: 'welcome',
@@ -341,6 +358,7 @@ export default function CopilotV2Drawer({ open, onClose }: CopilotV2DrawerProps)
             onDecide={(ap, dec, mods, cmt) =>
               handleApprovalDecision(m.id, ap, dec, mods, cmt)
             }
+            onDetectionFocus={onDetectionFocus}
           />
         ))}
       </div>
@@ -381,9 +399,10 @@ interface BubbleProps {
     modifications?: Record<string, any>,
     comment?: string,
   ) => void;
+  onDetectionFocus?: CopilotV2DrawerProps['onDetectionFocus'];
 }
 
-function MessageBubble({ msg, onDecide }: BubbleProps) {
+function MessageBubble({ msg, onDecide, onDetectionFocus }: BubbleProps) {
   const isUser = msg.role === 'user';
   return (
     <div
@@ -459,7 +478,11 @@ function MessageBubble({ msg, onDecide }: BubbleProps) {
                     )}
                   </div>
                   {vision && (
-                    <VisionToolResult name={s.name} result={s.result} />
+                    <VisionToolResult
+                      name={s.name}
+                      result={s.result}
+                      onDetectionClick={onDetectionFocus}
+                    />
                   )}
                 </div>
               );

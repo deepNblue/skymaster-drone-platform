@@ -9,22 +9,60 @@
  * 与 v1 的 /dashboard/copilot 页面并存，供逐步迁移。
  */
 import React, { useState } from 'react';
-import { Row, Col, Card, Button, Space, Typography, Empty, Alert } from 'antd';
+import { Row, Col, Card, Button, Space, Typography, Empty, Alert, message } from 'antd';
 import {
   PlusOutlined,
   RobotOutlined,
   MessageOutlined,
   ExperimentOutlined,
+  EnvironmentOutlined,
 } from '@ant-design/icons';
 import CopilotV2Drawer from '@/components/CopilotV2Drawer';
 import V2ApprovalsInbox from '@/components/V2ApprovalsInbox';
 
 const { Title, Text, Paragraph } = Typography;
 
+interface FocusedDetection {
+  id: string;
+  drone_id: string | null;
+  lat: number;
+  lng: number;
+  label: string;
+  confidence: number;
+  at: number;
+}
+
 export default function CopilotV2Page() {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [focused, setFocused] = useState<FocusedDetection | null>(null);
 
   const contentHeight = 'calc(100vh - 96px)';
+
+  const handleDetectionFocus = (d: {
+    id: string;
+    drone_id: string | null;
+    lat?: number | null;
+    lng?: number | null;
+    label: string;
+    confidence: number;
+  }) => {
+    if (d.lat == null || d.lng == null) {
+      message.warning('该检测缺少坐标信息，无法定位');
+      return;
+    }
+    setFocused({
+      id: d.id,
+      drone_id: d.drone_id,
+      lat: d.lat,
+      lng: d.lng,
+      label: d.label,
+      confidence: d.confidence,
+      at: Date.now(),
+    });
+    message.success(
+      `已定位到 ${d.label} @ ${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}`,
+    );
+  };
 
   return (
     <div style={{ padding: 16 }}>
@@ -104,7 +142,63 @@ export default function CopilotV2Page() {
         </Col>
       </Row>
 
-      <CopilotV2Drawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+      <CopilotV2Drawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        onDetectionFocus={handleDetectionFocus}
+      />
+
+      {focused && (
+        <Card
+          size="small"
+          key={focused.at}
+          style={{
+            position: 'fixed',
+            bottom: 16,
+            right: 16,
+            width: 320,
+            zIndex: 1050,
+            boxShadow: '0 6px 18px rgba(0,0,0,.15)',
+            borderLeft: '3px solid #1677ff',
+          }}
+          title={
+            <Space>
+              <EnvironmentOutlined style={{ color: '#1677ff' }} />
+              <span style={{ fontSize: 13 }}>已定位到检测</span>
+            </Space>
+          }
+          extra={
+            <Button size="small" type="text" onClick={() => setFocused(null)}>
+              关闭
+            </Button>
+          }
+        >
+          <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+            <div>
+              <Text strong>标签</Text>:{' '}
+              <Text code>{focused.label}</Text>{' '}
+              <Text type="secondary">
+                ({(focused.confidence * 100).toFixed(1)}%)
+              </Text>
+            </div>
+            <div>
+              <Text strong>无人机</Text>:{' '}
+              <Text code>
+                {focused.drone_id?.slice(0, 8) ?? '未知'}
+              </Text>
+            </div>
+            <div>
+              <Text strong>坐标</Text>:{' '}
+              <Text code>
+                {focused.lat.toFixed(5)}, {focused.lng.toFixed(5)}
+              </Text>
+            </div>
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              （占位：地图/3D 地球集成于 T5.3 完整版接入）
+            </Text>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

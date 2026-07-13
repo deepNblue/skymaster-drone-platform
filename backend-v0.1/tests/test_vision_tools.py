@@ -45,7 +45,8 @@ async def _seed(session, org_id, drone_id, samples):
 
 @pytest.mark.asyncio
 async def test_list_detections_basic(client):
-    """No filters → returns all detections for the org, newest first."""
+    """No filters → returns all detections for the org, newest first.
+    Also verifies that lat/lng/alt_m are surfaced in the payload."""
     from app.db import engine
     Session = async_sessionmaker(engine, expire_on_commit=False)
     org_id = uuid4()
@@ -55,11 +56,33 @@ async def test_list_detections_basic(client):
             id=drone_id, org_id=org_id, sn=f"SN-{uuid4().hex[:8]}",
             model="X", protocol="mavlink", status="online",
         ))
-        await _seed(db, org_id, drone_id, [
-            ("person", 0.92, 1),
-            ("vehicle", 0.71, 5),
-            ("person", 0.55, 30),
+        # Seed manually (not via _seed helper) so we can attach lat/lng.
+        now = datetime.now(timezone.utc)
+        db.add_all([
+            VisionDetection(
+                id=uuid4(), tenant_id=org_id, drone_id=drone_id,
+                label="person", confidence=0.92,
+                bbox=[0.1, 0.1, 0.3, 0.3],
+                lat=30.6720, lng=104.0655, alt_m=120.0,
+                created_at=now - timedelta(minutes=1),
+                model_tag="yolov8n", runtime="onnx", status="new",
+            ),
+            VisionDetection(
+                id=uuid4(), tenant_id=org_id, drone_id=drone_id,
+                label="vehicle", confidence=0.71,
+                bbox=[0.4, 0.4, 0.6, 0.6],
+                created_at=now - timedelta(minutes=5),
+                model_tag="yolov8n", runtime="onnx", status="new",
+            ),
+            VisionDetection(
+                id=uuid4(), tenant_id=org_id, drone_id=drone_id,
+                label="person", confidence=0.55,
+                bbox=[0.1, 0.1, 0.2, 0.2],
+                created_at=now - timedelta(minutes=30),
+                model_tag="yolov8n", runtime="onnx", status="new",
+            ),
         ])
+        await db.commit()
 
     async with Session() as db:
         ctx = ToolContext(db=db, org_id=org_id, user_id=uuid4())
@@ -67,7 +90,16 @@ async def test_list_detections_basic(client):
     assert out["count"] == 3
     labels = [d["label"] for d in out["detections"]]
     assert labels == ["person", "vehicle", "person"]  # newest first
-    assert out["detections"][0]["model_tag"] == "yolov8n"
+    top = out["detections"][0]
+    assert top["model_tag"] == "yolov8n"
+    # lat/lng/alt_m must be exposed to the LLM/UI so the operator can
+    # click-to-focus on the map (T5.3).
+    assert top["lat"] == pytest.approx(30.6720)
+    assert top["lng"] == pytest.approx(104.0655)
+    assert top["alt_m"] == pytest.approx(120.0)
+    # Second detection has no coords → should be None (not KeyError).
+    assert out["detections"][1]["lat"] is None
+    assert out["detections"][1]["lng"] is None
 
 
 @pytest.mark.asyncio
