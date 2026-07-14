@@ -46,6 +46,11 @@ class ListingOut(BaseModel):
     is_featured: bool
     created_at: datetime
     updated_at: datetime
+    # T5.9 — populated by the API layer, not the ORM row. Aggregated
+    # from ModelDeployment / ModelVersion so users can spot popular
+    # listings on the marketplace grid.
+    deployment_count: int = 0
+    version_count: int = 0
 
 
 class ListingPage(BaseModel):

@@ -143,9 +143,46 @@ async def list_listings(
         ModelListing.updated_at.desc(),
     ).limit(limit).offset(offset)
     rows = (await db.execute(stmt)).scalars().all()
-    return ListingPage(
-        total=total, items=[ListingOut.model_validate(r) for r in rows]
-    )
+
+    # T5.9 — batch-fetch deployment + version counts for this page in
+    # two aggregate queries (no N+1). deployment_count only counts
+    # active/installed statuses.
+    from app.models.model_marketplace import ModelDeployment, ModelVersion
+
+    listing_ids = [r.id for r in rows]
+    dep_counts: dict = {}
+    ver_counts: dict = {}
+    if listing_ids:
+        dep_rows = (await db.execute(
+            select(
+                ModelVersion.listing_id, func.count(ModelDeployment.id),
+            )
+            .join(
+                ModelVersion,
+                ModelVersion.id == ModelDeployment.version_id,
+            )
+            .where(
+                ModelVersion.listing_id.in_(listing_ids),
+                ModelDeployment.status.in_(["installed", "active"]),
+            )
+            .group_by(ModelVersion.listing_id)
+        )).all()
+        dep_counts = {lid: n for lid, n in dep_rows}
+
+        ver_rows = (await db.execute(
+            select(ModelVersion.listing_id, func.count(ModelVersion.id))
+            .where(ModelVersion.listing_id.in_(listing_ids))
+            .group_by(ModelVersion.listing_id)
+        )).all()
+        ver_counts = {lid: n for lid, n in ver_rows}
+
+    items = []
+    for r in rows:
+        out = ListingOut.model_validate(r)
+        out.deployment_count = dep_counts.get(r.id, 0)
+        out.version_count = ver_counts.get(r.id, 0)
+        items.append(out)
+    return ListingPage(total=total, items=items)
 
 
 @router.get("/listings/{lid}", response_model=ListingOut)
@@ -166,7 +203,30 @@ async def get_listing(
         org_id = getattr(user, "org_id", None)
         if listing.owner_org_id != org_id and getattr(user, "role", None) != "admin":
             raise HTTPException(status_code=404, detail="listing not found")
-    return ListingOut.model_validate(listing)
+
+    # T5.9 — decorate detail response with same aggregates.
+    from app.models.model_marketplace import ModelDeployment, ModelVersion
+
+    dep_count = (await db.execute(
+        select(func.count(ModelDeployment.id))
+        .join(
+            ModelVersion,
+            ModelVersion.id == ModelDeployment.version_id,
+        )
+        .where(
+            ModelVersion.listing_id == listing.id,
+            ModelDeployment.status.in_(["installed", "active"]),
+        )
+    )).scalar_one()
+    ver_count = (await db.execute(
+        select(func.count(ModelVersion.id)).where(
+            ModelVersion.listing_id == listing.id
+        )
+    )).scalar_one()
+    out = ListingOut.model_validate(listing)
+    out.deployment_count = dep_count
+    out.version_count = ver_count
+    return out
 
 
 # ---------------------------------------------------------------------------
