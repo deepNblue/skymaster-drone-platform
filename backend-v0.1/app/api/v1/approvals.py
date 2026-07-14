@@ -292,6 +292,8 @@ async def list_approvals(
 @router.get("/export.csv")
 async def export_approvals_csv(
     status: Optional[str] = Query(None),
+    created_from: Optional[datetime] = Query(None),
+    created_to: Optional[datetime] = Query(None),
     limit: int = Query(500, le=2000),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -302,6 +304,10 @@ async def export_approvals_csv(
     authority summary as a JSON blob column). Same status filter as the
     JSON list endpoint. Not paginated — capped at limit=2000 for a
     single-shot download.
+
+    T7.11: created_from/created_to (ISO-8601) filter by created_at.
+    Both are inclusive. Half-open is fine — pass only one to bound one
+    side.
     """
     import csv
     import io
@@ -312,6 +318,10 @@ async def export_approvals_csv(
     stmt = select(FlightApproval).where(FlightApproval.tenant_id == user.org_id)
     if status:
         stmt = stmt.where(FlightApproval.status == status)
+    if created_from:
+        stmt = stmt.where(FlightApproval.created_at >= created_from)
+    if created_to:
+        stmt = stmt.where(FlightApproval.created_at <= created_to)
     stmt = stmt.order_by(FlightApproval.created_at.desc()).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
 
@@ -373,6 +383,8 @@ async def export_approvals_csv(
 @router.get("/export/certificates.zip")
 async def export_approvals_certificates_zip(
     status: Optional[str] = Query(None),
+    created_from: Optional[datetime] = Query(None),
+    created_to: Optional[datetime] = Query(None),
     limit: int = Query(50, le=200),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -387,6 +399,8 @@ async def export_approvals_certificates_zip(
     cross-org leakage. Limit is intentionally smaller than the CSV
     export because PDF rendering is O(n) and this endpoint materializes
     all n bytes in memory.
+
+    T7.11: created_from/created_to same filter as CSV endpoint.
     """
     import io
     import zipfile
@@ -397,6 +411,10 @@ async def export_approvals_certificates_zip(
     stmt = select(FlightApproval).where(FlightApproval.tenant_id == user.org_id)
     if status:
         stmt = stmt.where(FlightApproval.status == status)
+    if created_from:
+        stmt = stmt.where(FlightApproval.created_at >= created_from)
+    if created_to:
+        stmt = stmt.where(FlightApproval.created_at <= created_to)
     stmt = stmt.order_by(FlightApproval.created_at.desc()).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
 
