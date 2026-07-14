@@ -85,7 +85,16 @@ export default function ApprovalsPage() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    // T5.7 — deep-link support: /dashboard/approvals?id=<uuid> opens the
+    // detail drawer directly. Non-fatal on bogus IDs (the fetch just 404s
+    // and the drawer stays closed).
+    if (typeof window !== 'undefined') {
+      const qid = new URLSearchParams(window.location.search).get('id');
+      if (qid) loadDetail(qid).catch(() => { /* swallow */ });
+    }
+  }, []);
 
   const loadDetail = async (id: string) => {
     setDetailId(id);

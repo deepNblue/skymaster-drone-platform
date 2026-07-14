@@ -23,7 +23,7 @@ import {
 import {
   ExperimentOutlined, ReloadOutlined, HistoryOutlined,
   ThunderboltOutlined, CheckCircleOutlined, CloseCircleOutlined,
-  ClockCircleOutlined,
+  ClockCircleOutlined, LinkOutlined,
 } from '@ant-design/icons';
 
 import {
@@ -50,6 +50,31 @@ function fmtMs(ms: number | null | undefined): string {
 
 function StepRow({ s }: { s: CopilotTraceStep }) {
   const failed = !!s.error;
+  // T5.7 — surface approval deep-links for tools that touch flight
+  // approvals (dispatch_rpa_authority + list_approvals). The trace
+  // page is often the entry point when debugging "why did the agent
+  // do X to approval Y?" — one click jumps the reviewer straight to
+  // /dashboard/approvals?id=<uuid>&drawer=1.
+  const approvalRefs: string[] = [];
+  const seen = new Set<string>();
+  const collect = (obj: unknown) => {
+    if (!obj || typeof obj !== 'object') return;
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      if (typeof v === 'string'
+          && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)
+          && (k === 'approval_id' || k === 'id')
+          && !seen.has(v)) {
+        approvalRefs.push(v);
+        seen.add(v);
+      }
+      if (Array.isArray(v)) v.forEach(collect);
+      else if (v && typeof v === 'object') collect(v);
+    }
+  };
+  collect(s.args);
+  collect(s.result);
+  const isApprovalTool = s.tool === 'dispatch_rpa_authority' || s.tool === 'list_approvals';
+
   return (
     <Card
       size="small"
@@ -69,6 +94,19 @@ function StepRow({ s }: { s: CopilotTraceStep }) {
             {new Date(s.ts).toLocaleTimeString()}
           </Text>
         )}
+        {isApprovalTool && approvalRefs.map((aid) => (
+          <a
+            key={aid}
+            href={`/dashboard/approvals?id=${aid}`}
+            target="_blank"
+            rel="noreferrer"
+            style={{ fontSize: 12 }}
+          >
+            <Tag color="purple" icon={<LinkOutlined />}>
+              approval {aid.slice(0, 8)}…
+            </Tag>
+          </a>
+        ))}
       </Space>
       <Collapse
         size="small"
