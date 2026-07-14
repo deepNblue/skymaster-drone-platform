@@ -472,6 +472,60 @@ async def list_reports(
     )
 
 
+# ---------------------------------------------------------------------------
+# T6.12 — reporter reputation surface for the moderation queue UI
+# ---------------------------------------------------------------------------
+@router.get("/moderation/reporters/{reporter_id}/reputation")
+async def get_reporter_reputation(
+    reporter_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Return one reporter's historical accuracy + current auto-hide weight.
+
+    Admin-only. Used by the moderation queue UI so a reviewer can see
+    'this account had 12 resolved + 3 dismissed → weight 2.0' before
+    deciding whether to trust a fresh report from them.
+
+    Response shape:
+      {
+        reporter_id: uuid,
+        resolved: int,   # past reports admin found actionable
+        dismissed: int,  # past reports admin discarded as noise
+        open: int,       # currently open reports from this user
+        weight: float,   # T6.11 clamp(0.3, 1 + 0.2*(res-dis), 2.0)
+        label: 'trusted' | 'neutral' | 'suspect'
+      }
+    """
+    _require_admin(user)
+    row = (
+        await db.execute(
+            select(
+                func.count().filter(CommunityReport.status == "resolved"),
+                func.count().filter(CommunityReport.status == "dismissed"),
+                func.count().filter(CommunityReport.status == "open"),
+            ).where(CommunityReport.reporter_id == reporter_id)
+        )
+    ).one()
+    resolved, dismissed, open_count = row
+    weight = await _reporter_weight(db, reporter_id)
+    if weight >= 1.4:
+        label = "trusted"
+    elif weight <= 0.6:
+        label = "suspect"
+    else:
+        label = "neutral"
+    return {
+        "reporter_id": str(reporter_id),
+        "resolved": int(resolved),
+        "dismissed": int(dismissed),
+        "open": int(open_count),
+        "weight": round(weight, 3),
+        "label": label,
+    }
+
+
+
 @router.post(
     "/moderation/reports/{rid}/resolve",
     response_model=ReportOut,
