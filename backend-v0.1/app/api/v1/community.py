@@ -223,7 +223,7 @@ async def list_comments(
 
 
 # ---------------------------------------------------------------------------
-# Reactions
+# Reactions — T6.15: idempotent like + real unlike
 # ---------------------------------------------------------------------------
 @router.post("/posts/{pid}/like", response_model=PostOut)
 async def like_post(
@@ -231,13 +231,60 @@ async def like_post(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> PostOut:
+    """Idempotent like: creates a CommunityLike row if absent, bumps
+    the denormalized ``like_count`` cache. Repeated calls by the same
+    user do NOT inflate the count."""
+    from app.models.community import CommunityLike
+
     post = (
         await db.execute(select(CommunityPost).where(CommunityPost.id == pid))
     ).scalar_one_or_none()
     if not post or post.moderation_status != "approved":
         raise HTTPException(status_code=404, detail="post not found")
-    post.like_count = (post.like_count or 0) + 1
-    await db.commit()
+
+    existing = (
+        await db.execute(
+            select(CommunityLike).where(
+                CommunityLike.post_id == pid,
+                CommunityLike.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        db.add(CommunityLike(post_id=pid, user_id=user.id))
+        post.like_count = (post.like_count or 0) + 1
+        await db.commit()
+    return PostOut.model_validate(post)
+
+
+@router.delete("/posts/{pid}/like", response_model=PostOut)
+async def unlike_post(
+    pid: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> PostOut:
+    """Idempotent unlike: removes the user's CommunityLike row and
+    decrements ``like_count``. If the user hadn't liked, no-op."""
+    from app.models.community import CommunityLike
+
+    post = (
+        await db.execute(select(CommunityPost).where(CommunityPost.id == pid))
+    ).scalar_one_or_none()
+    if not post or post.moderation_status != "approved":
+        raise HTTPException(status_code=404, detail="post not found")
+
+    existing = (
+        await db.execute(
+            select(CommunityLike).where(
+                CommunityLike.post_id == pid,
+                CommunityLike.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        await db.delete(existing)
+        post.like_count = max((post.like_count or 0) - 1, 0)
+        await db.commit()
     return PostOut.model_validate(post)
 
 

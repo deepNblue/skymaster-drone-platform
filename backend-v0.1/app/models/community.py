@@ -145,3 +145,35 @@ class CommunityReport(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
+
+class CommunityLike(Base):
+    """T6.15 — Persistent like record (one per user × post).
+
+    Prevents double-like inflation (was broken in the pre-T6.15
+    implementation — each POST /like blindly ++'d like_count) and
+    enables DELETE /like as a real unlike.
+    """
+
+    __tablename__ = "community_likes"
+    __table_args__ = (
+        UniqueConstraint(
+            "post_id", "user_id",
+            name="uq_community_like_user_post",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    post_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("community_posts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

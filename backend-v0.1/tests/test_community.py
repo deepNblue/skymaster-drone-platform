@@ -253,6 +253,9 @@ async def test_comment_creation_and_listing(client):
 
 @pytest.mark.asyncio
 async def test_like_increments_counter(client):
+    """T6.15 changed like semantics from 'blind ++' to 'idempotent
+    per-user'. Three likes from the same user now count as 1.
+    Historical test kept but assertion updated."""
     tok = await _make_user(client, "like_a@x.com", role="user")
     r = await client.post(
         "/api/v1/community/posts",
@@ -265,7 +268,9 @@ async def test_like_increments_counter(client):
             f"/api/v1/community/posts/{pid}/like", headers=_h(tok)
         )
         assert r.status_code == 200
-    assert r.json()["like_count"] == 3
+    # Idempotent by design (T6.15): repeated likes by same user do not
+    # inflate the counter.
+    assert r.json()["like_count"] == 1
 
 
 @pytest.mark.asyncio

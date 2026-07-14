@@ -90,6 +90,12 @@ export async function likeCommunityPost(pid: string): Promise<CommunityPost> {
   return data as CommunityPost;
 }
 
+/** T6.15 — Unlike (idempotent). */
+export async function unlikeCommunityPost(pid: string): Promise<CommunityPost> {
+  const { data } = await api.delete(`/api/v1/community/posts/${pid}/like`);
+  return data as CommunityPost;
+}
+
 // --- Admin ------------------------------------------------------------------
 
 export async function fetchModerationQueue(params: {
