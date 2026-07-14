@@ -331,6 +331,32 @@ async def report_post(
     if dup is not None:
         raise HTTPException(status_code=409, detail="already reported")
 
+    # T6.10 — per-reporter rate limit. Same reporter must not file more
+    # than N reports across the whole community within a rolling window,
+    # to prevent a single bad actor from tanking legitimate posts en
+    # masse. Defaults: 5 reports / 24h. Envs override both knobs.
+    from datetime import datetime, timedelta, timezone as _tz
+    window_hours = int(os.getenv("COMMUNITY_REPORT_RATE_WINDOW_HOURS", "24"))
+    window_max = int(os.getenv("COMMUNITY_REPORT_RATE_MAX", "5"))
+    if window_max > 0:
+        cutoff = datetime.now(tz=_tz.utc) - timedelta(hours=window_hours)
+        recent = (
+            await db.execute(
+                select(func.count()).select_from(CommunityReport).where(
+                    (CommunityReport.reporter_id == user.id)
+                    & (CommunityReport.created_at >= cutoff)
+                )
+            )
+        ).scalar_one()
+        if recent >= window_max:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"report rate limit: {window_max} reports per "
+                    f"{window_hours}h — try again later"
+                ),
+            )
+
     report = CommunityReport(
         post_id=pid,
         reporter_id=user.id,
