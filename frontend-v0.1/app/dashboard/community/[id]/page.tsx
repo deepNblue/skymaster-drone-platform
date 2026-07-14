@@ -53,6 +53,7 @@ import {
   CommunityComment,
   ModerationStatus,
 } from '@/lib/community';
+import { api } from '@/lib/api';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -249,6 +250,52 @@ export default function CommunityPostPage() {
             </Text>
           </Card>
         )}
+
+        {/* T6.16 — author-facing appeal card. Shown when the post has
+            been auto-hidden by the reputation-weighted rule and the
+            viewer is the author. */}
+        {post.moderation_status === 'pending' &&
+          post.moderation_reason?.startsWith('auto-hidden') && (
+            <Card
+              size="small"
+              style={{
+                background: '#fffbe6',
+                borderColor: '#ffe58f',
+                marginBottom: 12,
+              }}
+            >
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                <Text type="warning" style={{ fontSize: 12 }}>
+                  该帖已被系统自动隐藏：{post.moderation_reason}
+                </Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  如果认为是误判，可以提交申诉，管理员会人工复核。
+                </Text>
+                <Button
+                  size="small"
+                  onClick={async () => {
+                    try {
+                      const note = window.prompt('可选：申诉理由（留空可直接提交）') ?? undefined;
+                      const { data } = await api.post(
+                        `/api/v1/community/posts/${post.id}/appeal`,
+                        { note },
+                      );
+                      message.success(`已提交申诉 #${data.id.slice(0, 8)}，等待管理员审核`);
+                    } catch (e: any) {
+                      const detail = e?.response?.data?.detail ?? e.message;
+                      if (e?.response?.status === 409) {
+                        message.warning(`无法提交：${detail}`);
+                      } else {
+                        message.error(`提交失败: ${detail}`);
+                      }
+                    }
+                  }}
+                >
+                  📩 提交申诉
+                </Button>
+              </Space>
+            </Card>
+          )}
 
         <Paragraph
           style={{

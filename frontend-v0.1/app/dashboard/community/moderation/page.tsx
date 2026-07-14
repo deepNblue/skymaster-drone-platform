@@ -160,6 +160,14 @@ export default function CommunityModerationPage() {
       >
         用户举报队列
       </Button>
+      <Button
+        type="link"
+        icon={<FlagOutlined />}
+        style={{ marginBottom: 8, marginLeft: 8 }}
+        onClick={() => router.push('/dashboard/community/moderation/appeals')}
+      >
+        申诉队列
+      </Button>
 
       <div style={{ marginBottom: 12 }}>
         <Title level={4} style={{ margin: 0 }}>
