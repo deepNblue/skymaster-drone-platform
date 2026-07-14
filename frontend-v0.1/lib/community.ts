@@ -114,6 +114,18 @@ export async function moderateCommunityPost(
   return data as CommunityPost;
 }
 
+/** T6.14 — Admin toggle pinned flag on an approved post. */
+export async function pinCommunityPost(
+  pid: string,
+  pinned: boolean,
+): Promise<CommunityPost> {
+  const { data } = await api.post(
+    `/api/v1/community/posts/${pid}/pin`,
+    { pinned },
+  );
+  return data as CommunityPost;
+}
+
 // ---- T6.5 Reporting ------------------------------------------------------
 
 export const REPORT_REASONS = [

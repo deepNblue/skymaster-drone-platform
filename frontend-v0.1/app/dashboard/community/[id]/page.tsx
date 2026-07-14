@@ -72,6 +72,8 @@ export default function CommunityPostPage() {
   const [reply, setReply] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  // T6.14 — track viewer role to conditionally show admin pin controls.
+  const [meRole, setMeRole] = useState<string | null>(null);
   const [reportReason, setReportReason] = useState<ReportReason>('spam');
   const [reportNote, setReportNote] = useState('');
   const [reporting, setReporting] = useState(false);
@@ -95,6 +97,31 @@ export default function CommunityPostPage() {
   useEffect(() => {
     if (pid) load();
   }, [pid]);
+
+  // T6.14 — pull viewer role once (admin only sees pin controls).
+  useEffect(() => {
+    import('@/lib/api').then(({ getMe }) =>
+      getMe().then((u) => setMeRole(u.role)).catch(() => setMeRole(null))
+    );
+  }, []);
+
+  // T6.14 — toggle pinned status; refresh post on success.
+  const handleTogglePin = async () => {
+    if (!post) return;
+    try {
+      const { pinCommunityPost } = await import('@/lib/community');
+      const p = await pinCommunityPost(post.id, !post.pinned);
+      setPost(p);
+      message.success(p.pinned ? '已置顶' : '已取消置顶');
+    } catch (e: any) {
+      const status = e?.response?.status;
+      if (status === 409) {
+        message.warning('只能置顶已通过审核的帖子');
+      } else {
+        message.error(`置顶操作失败: ${e?.response?.data?.detail ?? e.message}`);
+      }
+    }
+  };
 
   const handleLike = async () => {
     if (!post) return;
@@ -165,10 +192,26 @@ export default function CommunityPostPage() {
       <Card>
         <Title level={3} style={{ marginBottom: 8 }}>
           {post.title}
+          {post.pinned && (
+            <Tag color="gold" style={{ marginLeft: 8, fontSize: 12 }}>
+              📌 置顶
+            </Tag>
+          )}
           {post.moderation_status !== 'approved' && (
             <Tag color={badge.color} style={{ marginLeft: 8, fontSize: 12 }}>
               {badge.label}
             </Tag>
+          )}
+          {meRole === 'admin' && post.moderation_status === 'approved' && (
+            <Button
+              size="small"
+              type={post.pinned ? 'default' : 'primary'}
+              style={{ marginLeft: 12, fontSize: 12 }}
+              onClick={handleTogglePin}
+              title={post.pinned ? '取消置顶后此帖不再在列表页优先显示' : '置顶后此帖将排在社区列表最前'}
+            >
+              {post.pinned ? '取消置顶' : '📌 置顶'}
+            </Button>
           )}
         </Title>
         <Space split={<Divider type="vertical" />} style={{ marginBottom: 16 }}>

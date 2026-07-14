@@ -20,6 +20,7 @@ import os
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -318,6 +319,44 @@ async def moderate_decision(
     map_ = {"approve": "approved", "reject": "rejected", "archive": "archived"}
     post.moderation_status = map_[payload.action]
     post.moderation_reason = payload.reason or None
+    await db.commit()
+    return PostOut.model_validate(post)
+
+
+# ---------------------------------------------------------------------------
+# T6.14 — admin pin/unpin
+# ---------------------------------------------------------------------------
+class PinDecision(BaseModel):
+    pinned: bool
+
+
+@router.post("/posts/{pid}/pin", response_model=PostOut)
+async def pin_post(
+    pid: UUID,
+    payload: PinDecision,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> PostOut:
+    """Admin toggles the pinned flag on a post.
+
+    Pinned posts sort first in the list feed (see list_posts ordering
+    on ``CommunityPost.pinned.desc()``). We only allow pinning
+    approved posts — pinning something that's still 'pending' or
+    'rejected' would show it above the fold before human review,
+    which defeats the point of moderation.
+    """
+    _require_admin(user)
+    post = (
+        await db.execute(select(CommunityPost).where(CommunityPost.id == pid))
+    ).scalar_one_or_none()
+    if not post:
+        raise HTTPException(status_code=404, detail="post not found")
+    if payload.pinned and post.moderation_status != "approved":
+        raise HTTPException(
+            status_code=409,
+            detail="can only pin approved posts",
+        )
+    post.pinned = bool(payload.pinned)
     await db.commit()
     return PostOut.model_validate(post)
 
