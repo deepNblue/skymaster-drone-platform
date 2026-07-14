@@ -49,6 +49,38 @@ def _require_admin(user: User) -> None:
         raise HTTPException(status_code=403, detail="admin only")
 
 
+# T6.11 — reporter reputation weight.
+async def _reporter_weight(db: AsyncSession, reporter_id) -> float:
+    """Return a reputation-based weight in [0.3, 2.0] for a reporter.
+
+    Signal source: how admins have historically resolved this reporter's
+    reports.
+      resolved  → the report was actionable → reputation +1
+      dismissed → the report was noise      → reputation −1
+
+    Formula:
+      raw   = resolved - dismissed
+      weight = clamp(0.3, 1 + 0.2 * raw, 2.0)
+
+    Fresh accounts start at weight=1.0 (no history yet). The ceiling of
+    2.0 caps how much a "power reporter" can dominate; the floor of
+    0.3 keeps a persistent noise account from being ignored entirely
+    (still marginally counted, so a coordinated brigade of them still
+    triggers admin review).
+    """
+    row = (
+        await db.execute(
+            select(
+                func.count().filter(CommunityReport.status == "resolved"),
+                func.count().filter(CommunityReport.status == "dismissed"),
+            ).where(CommunityReport.reporter_id == reporter_id)
+        )
+    ).one()
+    resolved, dismissed = row
+    raw = int(resolved) - int(dismissed)
+    return max(0.3, min(2.0, 1.0 + 0.2 * raw))
+
+
 # ---------------------------------------------------------------------------
 # Posts
 # ---------------------------------------------------------------------------
@@ -370,21 +402,39 @@ async def report_post(
     # T6.8 auto-hide: once open-report count crosses AUTO_HIDE_THRESHOLD
     # (default 3), demote an 'approved' post back to 'pending' so it
     # disappears from the public feed until an admin reviews.
+    #
+    # T6.11 — reputation-weighted variant. Instead of counting each open
+    # report as 1.0, we weight it by the reporter's historical accuracy:
+    #   weight = clamp(0.3, 1 + 0.2 * (resolved - dismissed), 2.0)
+    # so a habitual dismissed-report filer counts less and a reporter
+    # whose reports admins keep resolving counts more. Set env var
+    # COMMUNITY_REPORT_WEIGHTED=0 to fall back to the old count-based
+    # behavior.
     threshold = int(os.getenv("COMMUNITY_AUTO_HIDE_THRESHOLD", "3"))
+    weighted = os.getenv("COMMUNITY_REPORT_WEIGHTED", "1") != "0"
     if post.moderation_status == "approved":
-        open_count = (
-            await db.execute(
-                select(func.count()).select_from(CommunityReport).where(
-                    (CommunityReport.post_id == pid)
-                    & (CommunityReport.status == "open")
-                )
-            )
-        ).scalar_one()
-        if open_count >= threshold:
+        open_reports_stmt = select(
+            CommunityReport.reporter_id
+        ).where(
+            (CommunityReport.post_id == pid)
+            & (CommunityReport.status == "open")
+        )
+        open_reporter_ids = (
+            await db.execute(open_reports_stmt)
+        ).scalars().all()
+
+        if weighted and open_reporter_ids:
+            score = 0.0
+            for reporter_id in open_reporter_ids:
+                score += await _reporter_weight(db, reporter_id)
+        else:
+            score = float(len(open_reporter_ids))
+
+        if score >= threshold:
             post.moderation_status = "pending"
             post.moderation_reason = (
-                f"auto-hidden: {open_count} open reports "
-                f"(threshold={threshold})"
+                f"auto-hidden: {len(open_reporter_ids)} open reports, "
+                f"weighted score={score:.2f} (threshold={threshold})"
             )
 
     await db.commit()
@@ -458,17 +508,27 @@ async def resolve_report(
     # T6.8: If resolving the last open report drops the count below the
     # auto-hide threshold, restore the post to 'approved' (only if it
     # was previously auto-hidden — never re-promote admin-rejected content).
+    #
+    # T6.11 — use the same weighted-score logic as the report path so
+    # resolve-based restoration is symmetric with report-based auto-hide.
     threshold = int(os.getenv("COMMUNITY_AUTO_HIDE_THRESHOLD", "3"))
-    remaining = (
+    weighted = os.getenv("COMMUNITY_REPORT_WEIGHTED", "1") != "0"
+    remaining_ids = (
         await db.execute(
-            select(func.count()).select_from(CommunityReport).where(
+            select(CommunityReport.reporter_id).where(
                 (CommunityReport.post_id == report.post_id)
                 & (CommunityReport.status == "open")
                 & (CommunityReport.id != report.id)
             )
         )
-    ).scalar_one()
-    if remaining < threshold:
+    ).scalars().all()
+    if weighted and remaining_ids:
+        remaining_score = 0.0
+        for rid_ in remaining_ids:
+            remaining_score += await _reporter_weight(db, rid_)
+    else:
+        remaining_score = float(len(remaining_ids))
+    if remaining_score < threshold:
         post = (
             await db.execute(
                 select(CommunityPost).where(CommunityPost.id == report.post_id)
