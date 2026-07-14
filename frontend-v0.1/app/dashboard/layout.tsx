@@ -25,6 +25,7 @@ import {
   FileTextOutlined,
   ShopOutlined,
   ExperimentOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuthStore } from '@/lib/store';
@@ -42,6 +43,7 @@ const menuItems = [
   { key: '/dashboard/approvals', icon: <AuditOutlined />, label: '审批' },
   { key: '/dashboard/copilot', icon: <RobotOutlined />, label: 'Copilot' },
   { key: '/dashboard/copilot-v2', icon: <ExperimentOutlined />, label: 'Copilot v2' },
+  { key: '/dashboard/copilot-traces', icon: <HistoryOutlined />, label: 'Copilot 追踪' },
   { key: '/dashboard/crypto-sm2', icon: <SafetyCertificateOutlined />, label: 'SM2 签名' },
   { key: '/dashboard/audit-export', icon: <FileTextOutlined />, label: '审计导出' },
   { key: '/dashboard/ciio', icon: <SafetyOutlined />, label: 'CIIO 自评' },

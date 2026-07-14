@@ -1150,6 +1150,42 @@ export async function approveTrace(
   return data;
 }
 
+// ---- T5.6 Copilot trace inspector -----------------------------------------
+export interface CopilotTraceStep {
+  idx: number;
+  tool: string;
+  args: Record<string, unknown> | null;
+  result: Record<string, unknown> | null;
+  duration_ms: number | null;
+  error: string | null;
+  ts: string | null;
+}
+
+export interface CopilotTrace {
+  id: string;
+  session_id: string | null;
+  prompt: string | null;
+  intent: string | null;
+  confidence: number | null;
+  status: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  output: Record<string, unknown> | null;
+  steps: CopilotTraceStep[] | null;
+}
+
+export async function listSessionTraces(sessionId: string): Promise<CopilotTrace[]> {
+  const { data } = await api.get(
+    `/api/v1/copilot/sessions/${sessionId}/traces`,
+  );
+  return data as CopilotTrace[];
+}
+
+export async function getTrace(traceId: string): Promise<CopilotTrace> {
+  const { data } = await api.get(`/api/v1/copilot/traces/${traceId}`);
+  return data as CopilotTrace;
+}
+
 // ---- Admin API (v1.0 multi-tenant) ----------------------------------------
 export async function listOrganizations() {
   const { data } = await api.get('/api/v1/admin/organizations');
