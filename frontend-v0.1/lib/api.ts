@@ -880,6 +880,18 @@ export function approvalCertificatePdfUrl(id: string): string {
   return `${baseURL}/api/v1/approvals/${id}/certificate.pdf`;
 }
 
+/** T7.7 — Absolute URL for the UOM reports CSV export. */
+export function uomReportsCsvUrl(opts?: {
+  operator_id?: string;
+  status?: string;
+}): string {
+  const qs = new URLSearchParams();
+  if (opts?.operator_id) qs.set('operator_id', opts.operator_id);
+  if (opts?.status) qs.set('status', opts.status);
+  const q = qs.toString();
+  return `${baseURL}/api/v1/uom/reports.csv${q ? '?' + q : ''}`;
+}
+
 /** T7.4 — Public verify snapshot (what the QR on the PDF points to). */
 export async function verifyApproval(id: string) {
   const { data } = await api.get(`/api/v1/approvals/${id}/verify`);
