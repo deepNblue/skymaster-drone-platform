@@ -18,11 +18,12 @@ Endpoints
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -781,3 +782,224 @@ async def list_signatures(
 ) -> list[FlightApprovalSignature]:
     row = await _get_or_404(db, approval_id)
     return list(row.signatures or [])
+
+
+# ---------------------------------------------------------------------------
+# T7.1 — RPA bridge integration
+# ---------------------------------------------------------------------------
+
+
+class RPADispatchIn(BaseModel):
+    authority_code: str = Field(..., min_length=1, max_length=32)
+
+
+class RPACallbackIn(BaseModel):
+    """External RPA worker POSTs this after logging into the属地 portal.
+
+    HMAC verification happens in the endpoint, not here.
+    """
+
+    job_id: str = Field(..., min_length=1, max_length=64)
+    status: str = Field(..., pattern="^(submitted|approving|approved|rejected|cancelled|error)$")
+    external_ref: Optional[str] = Field(default=None, max_length=128)
+    reject_reason: Optional[str] = Field(default=None, max_length=512)
+    evidence: Optional[dict] = None
+
+
+class RPAJobOut(BaseModel):
+    job_id: str
+    approval_id: str
+    authority_code: str
+    driver: str
+    status: str
+    external_ref: Optional[str] = None
+    reject_reason: Optional[str] = None
+    poll_count: int
+    created_at: float
+    updated_at: float
+
+
+@router.post("/{approval_id}/rpa-dispatch", response_model=RPAJobOut)
+async def rpa_dispatch(
+    approval_id: UUID,
+    body: RPADispatchIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Dispatch (or return-existing) an RPA job for one authority row.
+
+    Idempotent: hitting this twice for the same (approval, authority)
+    returns the same RPAJob. Authority row's channel must be 'rpa'.
+    """
+    from app.services.rpa_bridge import get_bridge
+
+    row = await _get_or_404(db, approval_id)
+    target = next(
+        (a for a in row.authorities if a.authority_code == body.authority_code),
+        None,
+    )
+    if not target:
+        raise HTTPException(
+            404, f"authority {body.authority_code!r} not on this approval",
+        )
+    if target.channel != "rpa":
+        raise HTTPException(
+            400,
+            f"authority {body.authority_code!r} uses channel {target.channel!r}, "
+            "not 'rpa'",
+        )
+
+    bridge = get_bridge()
+    payload = {
+        "title": row.title,
+        "purpose": row.purpose,
+        "pilot_name": row.pilot_name,
+        "aircraft_reg": row.aircraft_reg,
+        "aircraft_model": row.aircraft_model,
+        "area_polygon": row.area_polygon,
+        "max_alt_m": row.max_alt_m,
+        "start_ts": row.start_ts.isoformat() if row.start_ts else None,
+        "end_ts": row.end_ts.isoformat() if row.end_ts else None,
+    }
+    job = await bridge.dispatch(str(row.id), body.authority_code, payload)
+
+    # Sync the authority row with what the bridge reports.
+    now = datetime.now(tz=timezone.utc)
+    target.status = job.status
+    target.submitted_at = target.submitted_at or now
+    target.external_ref = job.external_ref
+    target.extra = {**(target.extra or {}), "rpa_job_id": job.job_id, "driver": job.driver}
+    row.timeline = (row.timeline or []) + [
+        _timeline_event(
+            str(user.id),
+            "rpa_dispatch",
+            f"authority={body.authority_code} job={job.job_id} driver={job.driver}",
+        )
+    ]
+    await db.commit()
+    return {
+        "job_id": job.job_id,
+        "approval_id": job.approval_id,
+        "authority_code": job.authority_code,
+        "driver": job.driver,
+        "status": job.status,
+        "external_ref": job.external_ref,
+        "reject_reason": job.reject_reason,
+        "poll_count": job.poll_count,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+    }
+
+
+@router.get("/rpa-jobs/{job_id}", response_model=RPAJobOut)
+async def rpa_job_status(
+    job_id: str,
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Poll and return the current RPA job snapshot. The bridge
+    driver may advance status on this call (mock driver auto-progresses).
+    """
+    from app.services.rpa_bridge import get_bridge
+
+    bridge = get_bridge()
+    job = await bridge.poll(job_id)
+    if not job:
+        raise HTTPException(404, "rpa job not found")
+    return {
+        "job_id": job.job_id,
+        "approval_id": job.approval_id,
+        "authority_code": job.authority_code,
+        "driver": job.driver,
+        "status": job.status,
+        "external_ref": job.external_ref,
+        "reject_reason": job.reject_reason,
+        "poll_count": job.poll_count,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+    }
+
+
+@router.post("/rpa-callback", status_code=200)
+async def rpa_callback(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """HMAC-signed webhook from an external RPA worker (Docker Playwright
+    box, staff-desk browser extension, or the mock in tests).
+
+    Verifies X-RPA-Signature = hex(HMAC-SHA256(raw_body, RPA_WEBHOOK_SECRET))
+    over the raw request bytes (order-preserving), then updates the
+    authority row + emits a timeline event.
+    """
+    import hashlib, hmac, json as _json
+
+    secret = os.getenv("RPA_WEBHOOK_SECRET", "")
+    if not secret:
+        raise HTTPException(503, "RPA_WEBHOOK_SECRET not configured on server")
+
+    raw = await request.body()
+    provided = request.headers.get("X-RPA-Signature", "")
+    expected = hmac.new(
+        secret.encode("utf-8"), raw, hashlib.sha256,
+    ).hexdigest()
+    if not provided or not hmac.compare_digest(expected, provided):
+        raise HTTPException(401, "invalid RPA signature")
+
+    try:
+        parsed = _json.loads(raw)
+    except _json.JSONDecodeError:
+        raise HTTPException(400, "malformed JSON body")
+
+    try:
+        body = RPACallbackIn.model_validate(parsed)
+    except Exception as e:
+        raise HTTPException(422, f"invalid callback payload: {e}")
+
+    from app.services.rpa_bridge import get_bridge
+
+    bridge = get_bridge()
+    job = bridge.get(body.job_id)
+    if not job:
+        raise HTTPException(404, "rpa job not found")
+
+    # Update job (in-memory) — a real Redis-backed bridge would persist.
+    job.status = body.status
+    if body.external_ref is not None:
+        job.external_ref = body.external_ref
+    if body.reject_reason is not None:
+        job.reject_reason = body.reject_reason
+    if body.evidence is not None:
+        job.evidence = body.evidence
+    job.touch()
+
+    # Update the matching FlightApprovalAuthority row.
+    row_result = await db.execute(
+        select(FlightApprovalAuthority).where(
+            FlightApprovalAuthority.approval_id == UUID(job.approval_id),
+            FlightApprovalAuthority.authority_code == job.authority_code,
+        )
+    )
+    auth_row = row_result.scalar_one_or_none()
+    if auth_row:
+        auth_row.status = body.status
+        if body.external_ref:
+            auth_row.external_ref = body.external_ref
+        if body.reject_reason:
+            auth_row.reject_reason = body.reject_reason
+        if body.status in {"approved", "rejected"}:
+            auth_row.responded_at = datetime.now(tz=timezone.utc)
+        # Append a timeline event on the parent approval.
+        approval = (await db.execute(
+            select(FlightApproval).where(FlightApproval.id == auth_row.approval_id)
+        )).scalar_one()
+        approval.timeline = (approval.timeline or []) + [
+            _timeline_event(
+                "rpa-worker",
+                f"rpa_{body.status}",
+                f"authority={job.authority_code} job={job.job_id}"
+                + (f" reason={body.reject_reason}" if body.reject_reason else ""),
+            )
+        ]
+        await db.commit()
+
+    return {"ok": True, "job_id": job.job_id, "status": job.status}
