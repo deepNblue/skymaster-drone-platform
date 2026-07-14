@@ -282,6 +282,21 @@ export default function ModelMarketplacePage() {
                           <span>
                             <UserOutlined /> {l.owner_user_id?.slice(0, 6) ?? '—'}
                           </span>
+                          {/* T5.9 — popularity signal from backend aggregate */}
+                          {typeof l.deployment_count === 'number' && (
+                            <Tooltip title="激活部署数（installed + active）">
+                              <span>
+                                🚀 {l.deployment_count}
+                              </span>
+                            </Tooltip>
+                          )}
+                          {typeof l.version_count === 'number' && l.version_count > 0 && (
+                            <Tooltip title="模型版本数">
+                              <span>
+                                v{l.version_count}
+                              </span>
+                            </Tooltip>
+                          )}
                           {(l.tags ?? []).slice(0, 3).map((t) => (
                             <span key={t}>#{t}</span>
                           ))}

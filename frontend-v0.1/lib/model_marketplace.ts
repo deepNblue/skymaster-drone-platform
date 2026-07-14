@@ -25,6 +25,9 @@ export interface ModelListing {
   is_featured: boolean;
   created_at: string;
   updated_at: string;
+  // T5.9 — aggregate counts populated by the API layer.
+  deployment_count?: number;
+  version_count?: number;
 }
 
 export interface ModelVersion {
