@@ -19,11 +19,13 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Card, Input, Space, Table, Tag, Typography, Button, Collapse,
   message, Empty, Statistic, Row, Col, Divider,
+  DatePicker, Select,
 } from 'antd';
+import type { Dayjs } from 'dayjs';
 import {
   ExperimentOutlined, ReloadOutlined, HistoryOutlined,
   ThunderboltOutlined, CheckCircleOutlined, CloseCircleOutlined,
-  ClockCircleOutlined, LinkOutlined,
+  ClockCircleOutlined, LinkOutlined, FilterOutlined,
 } from '@ant-design/icons';
 
 import {
@@ -160,6 +162,10 @@ export default function CopilotTracesPage() {
   const [traces, setTraces] = useState<CopilotTrace[]>([]);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, CopilotTrace>>({});
+  // T5.8 — client-side filters (server has no query params for this yet).
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  const [range, setRange] = useState<[Dayjs, Dayjs] | null>(null);
+  const [toolQuery, setToolQuery] = useState<string>('');
 
   const load = useCallback(async (sid: string) => {
     if (!sid.trim()) return;
@@ -207,6 +213,32 @@ export default function CopilotTracesPage() {
     pending: traces.filter((t) => t.status === 'pending_approval').length,
   };
 
+  // T5.8 — client-side filtering. Server API returns whole session list;
+  // we filter locally so the summary card stays in-sync with the visible
+  // rows (see 'visible' derived below).
+  const visible = traces.filter((t) => {
+    if (statusFilter.length && (!t.status || !statusFilter.includes(t.status))) {
+      return false;
+    }
+    if (range && t.started_at) {
+      const ts = new Date(t.started_at).getTime();
+      if (ts < range[0].startOf('day').valueOf()) return false;
+      if (ts > range[1].endOf('day').valueOf()) return false;
+    }
+    if (toolQuery) {
+      const q = toolQuery.toLowerCase();
+      const full = expanded[t.id];
+      const steps = full?.steps ?? [];
+      // If we've never expanded the row, we don't know its tool names —
+      // keep it visible; the user can expand or ignore.
+      if (steps.length > 0
+          && !steps.some((s) => (s.tool || '').toLowerCase().includes(q))) {
+        return false;
+      }
+    }
+    return true;
+  });
+
   return (
     <div style={{ padding: 16 }}>
       <div style={{ marginBottom: 16 }}>
@@ -244,6 +276,53 @@ export default function CopilotTracesPage() {
       </Card>
 
       {traces.length > 0 && (
+        <Card size="small" style={{ marginBottom: 16 }} title={<><FilterOutlined /> 过滤</>}>
+          <Space wrap>
+            <Select
+              mode="multiple"
+              allowClear
+              style={{ minWidth: 220 }}
+              placeholder="状态"
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={[
+                { value: 'completed', label: '完成' },
+                { value: 'running', label: '运行中' },
+                { value: 'pending_approval', label: '待审批' },
+                { value: 'approved', label: '已通过' },
+                { value: 'rejected', label: '已驳回' },
+                { value: 'error', label: '错误' },
+              ]}
+            />
+            <DatePicker.RangePicker
+              value={range as any}
+              onChange={(v) => setRange(v as any)}
+              placeholder={['开始日期', '结束日期']}
+            />
+            <Input
+              allowClear
+              style={{ width: 220 }}
+              placeholder="按工具名过滤（先展开对应行）"
+              value={toolQuery}
+              onChange={(e) => setToolQuery(e.target.value)}
+            />
+            <Button
+              onClick={() => {
+                setStatusFilter([]);
+                setRange(null);
+                setToolQuery('');
+              }}
+            >
+              清除
+            </Button>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              显示 {visible.length} / {traces.length}
+            </Text>
+          </Space>
+        </Card>
+      )}
+
+      {traces.length > 0 && (
         <Card size="small" style={{ marginBottom: 16 }}>
           <Row gutter={16}>
             <Col span={6}><Statistic title="总数" value={summary.total} /></Col>
@@ -261,7 +340,7 @@ export default function CopilotTracesPage() {
           rowKey="id"
           size="small"
           loading={loading}
-          dataSource={traces}
+          dataSource={visible}
           expandable={{
             onExpand: (open, record) => open && onExpand(record),
             expandedRowRender: (record) => {
