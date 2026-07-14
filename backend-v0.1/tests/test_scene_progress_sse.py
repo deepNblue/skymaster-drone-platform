@@ -154,3 +154,21 @@ async def test_scene_progress_sse_cross_org_denied(client):
         timeout=3.0,
     )
     assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_scene_progress_sse_accepts_query_token(client):
+    """EventSource can't send custom headers → the SSE endpoint must
+    accept ?token= as an alternative to the Authorization header."""
+    tok, _, _ = await _mkuser("qtok@t411.com")
+    sid = await _mkscene(client, tok, "qtok-scene")
+    await _promote_terminal(sid, status="ready")
+
+    r = await asyncio.wait_for(
+        client.get(f"/api/v1/scenes/{sid}/progress.sse?token={tok}"),
+        timeout=5.0,
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    events = _parse_sse_events(r.text)
+    assert any(e["event"] == "done" for e in events), r.text

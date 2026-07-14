@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -284,12 +284,16 @@ async def archive_scene(
 
 # ---------------------------------------------------------------------------
 # T4.11 — Scene ingestion progress SSE
+#
+# EventSource can't send custom headers, so we accept the token via the
+# ?token= query string. Auth is enforced identically to get_current_user.
 # ---------------------------------------------------------------------------
 @router.get("/{scene_id}/progress.sse")
 async def scene_progress_sse(
     scene_id: UUID,
+    request: Request,
+    token: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
 ):
     """Server-Sent Events feed of a scene's status + metrics.
 
@@ -317,6 +321,34 @@ async def scene_progress_sse(
     from datetime import datetime, timezone
 
     from fastapi.responses import StreamingResponse
+    from jose import JWTError
+
+    from app.services.auth import decode_token
+    from app.models.user import User as _User
+
+    # Resolve the user: prefer Authorization header, fall back to ?token=
+    auth_header = request.headers.get("authorization")
+    raw_token = None
+    if auth_header and auth_header.lower().startswith("bearer "):
+        raw_token = auth_header[7:]
+    elif token:
+        raw_token = token
+    if not raw_token:
+        raise HTTPException(
+            status_code=401, detail="Missing bearer token",
+        )
+    try:
+        payload = decode_token(raw_token)
+    except JWTError as exc:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {exc}")
+    sub = payload.get("sub")
+    if not sub:
+        raise HTTPException(status_code=401, detail="Malformed token")
+    user = (
+        await db.execute(select(_User).where(_User.id == UUID(sub)))
+    ).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not found")
 
     scene = await _load_with_assets(db, scene_id)
     _authz_read(scene, user)
