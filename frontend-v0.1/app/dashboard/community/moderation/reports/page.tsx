@@ -33,6 +33,8 @@ import {
   resolveReport,
   ReportOut,
   REPORT_REASONS,
+  getReporterReputation,
+  type ReporterReputation,
 } from '@/lib/community';
 import { getMe } from '@/lib/api';
 
@@ -48,6 +50,8 @@ export default function CommunityReportModerationPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
+  // T6.12 — cache reporter reputation lookups to avoid N+1 fetch bursts.
+  const [reps, setReps] = useState<Record<string, ReporterReputation>>({});
 
   // resolve/dismiss note modal
   const [target, setTarget] = useState<ReportOut | null>(null);
@@ -60,6 +64,18 @@ export default function CommunityReportModerationPage() {
       const res = await listOpenReports();
       setItems(res.items);
       setTotal(res.total);
+      // T6.12 — batch-fetch reputation for the unique reporters in view.
+      const unique = Array.from(
+        new Set(res.items.map((r) => r.reporter_id).filter((id): id is string => !!id)),
+      );
+      const results = await Promise.allSettled(
+        unique.map((id) => getReporterReputation(id)),
+      );
+      const nextReps: Record<string, ReporterReputation> = {};
+      results.forEach((rr, i) => {
+        if (rr.status === 'fulfilled') nextReps[unique[i]] = rr.value;
+      });
+      setReps(nextReps);
     } catch (e: any) {
       const st = e?.response?.status;
       if (st === 403) {
@@ -212,6 +228,30 @@ export default function CommunityReportModerationPage() {
                       <Text type="secondary" style={{ fontSize: 11 }}>
                         举报人: {r.reporter_id?.slice(0, 8) ?? '匿名'} ·{' '}
                         {new Date(r.created_at).toLocaleString('zh-CN')}
+                        {r.reporter_id && reps[r.reporter_id] && (
+                          <>
+                            {' · '}
+                            <Tag
+                              color={
+                                reps[r.reporter_id]!.label === 'trusted' ? 'green' :
+                                reps[r.reporter_id]!.label === 'suspect' ? 'red' :
+                                'default'
+                              }
+                              style={{ fontSize: 10, marginLeft: 2 }}
+                              title={
+                                `信誉权重 ${reps[r.reporter_id]!.weight.toFixed(2)} · ` +
+                                `已resolve ${reps[r.reporter_id]!.resolved} · ` +
+                                `已dismiss ${reps[r.reporter_id]!.dismissed} · ` +
+                                `其它open ${reps[r.reporter_id]!.open}`
+                              }
+                            >
+                              {reps[r.reporter_id]!.label === 'trusted' ? '可信' :
+                               reps[r.reporter_id]!.label === 'suspect' ? '可疑' :
+                               '中立'}
+                              {' '}w={reps[r.reporter_id]!.weight.toFixed(2)}
+                            </Tag>
+                          </>
+                        )}
                       </Text>
                     </Space>
                   }

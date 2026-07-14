@@ -172,6 +172,25 @@ export async function resolveReport(
   return data as ReportOut;
 }
 
+/** T6.12 — reporter reputation for moderation UI. */
+export interface ReporterReputation {
+  reporter_id: string;
+  resolved: number;
+  dismissed: number;
+  open: number;
+  weight: number;
+  label: 'trusted' | 'neutral' | 'suspect';
+}
+
+export async function getReporterReputation(
+  reporterId: string,
+): Promise<ReporterReputation> {
+  const { data } = await api.get(
+    `/api/v1/community/moderation/reporters/${reporterId}/reputation`,
+  );
+  return data as ReporterReputation;
+}
+
 /** T6.8 — admin dashboard summary. */
 export interface ModerationStats {
   open_reports: number;
