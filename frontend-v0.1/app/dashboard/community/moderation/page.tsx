@@ -36,7 +36,9 @@ import {
 import {
   fetchModerationQueue,
   moderateCommunityPost,
+  fetchModerationStats,
   CommunityPost,
+  ModerationStats,
 } from '@/lib/community';
 import { getMe } from '@/lib/api';
 
@@ -48,6 +50,7 @@ export default function CommunityModerationPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
+  const [stats, setStats] = useState<ModerationStats | null>(null);
 
   // reject-with-reason modal
   const [rejectTarget, setRejectTarget] = useState<CommunityPost | null>(null);
@@ -56,9 +59,13 @@ export default function CommunityModerationPage() {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetchModerationQueue({ limit: 100 });
+      const [res, s] = await Promise.all([
+        fetchModerationQueue({ limit: 100 }),
+        fetchModerationStats().catch(() => null),
+      ]);
       setPosts(res.items);
       setTotal(res.total);
+      setStats(s);
     } catch (e: any) {
       const st = e?.response?.status;
       if (st === 403) {
@@ -72,6 +79,16 @@ export default function CommunityModerationPage() {
       setLoading(false);
     }
   }, []);
+
+  // T6.8: poll stats every 10s so the admin sees rising open-report counts
+  // (and freshly auto-hidden posts) without having to reload the queue.
+  useEffect(() => {
+    if (forbidden) return;
+    const id = window.setInterval(() => {
+      fetchModerationStats().then(setStats).catch(() => {});
+    }, 10_000);
+    return () => window.clearInterval(id);
+  }, [forbidden]);
 
   useEffect(() => {
     getMe()
@@ -153,6 +170,44 @@ export default function CommunityModerationPage() {
         </Text>
       </div>
 
+      {stats && (
+        <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+          <Card size="small" style={{ minWidth: 140 }}>
+            <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                Open 举报
+              </Text>
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 600, color: stats.open_reports > 0 ? '#faad14' : undefined }}>
+              {stats.open_reports}
+            </div>
+          </Card>
+          <Card size="small" style={{ minWidth: 140 }}>
+            <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                Pending 帖子
+              </Text>
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 600 }}>
+              {stats.pending_posts}
+            </div>
+          </Card>
+          <Card size="small" style={{ minWidth: 160 }}>
+            <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                自动隐藏
+              </Text>
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 600, color: stats.auto_hidden_posts > 0 ? '#ff4d4f' : undefined }}>
+              {stats.auto_hidden_posts}
+            </div>
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              阈值 {stats.auto_hide_threshold} 条举报
+            </Text>
+          </Card>
+        </div>
+      )}
+
       <Alert
         type="warning"
         showIcon
@@ -211,6 +266,9 @@ export default function CommunityModerationPage() {
                     <Space>
                       <span>{p.title}</span>
                       <Tag color="processing">待审</Tag>
+                      {p.moderation_reason?.startsWith('auto-hidden:') && (
+                        <Tag color="red">🚩 举报自动隐藏</Tag>
+                      )}
                       {(p.tags ?? []).map((t) => (
                         <Tag key={t}>#{t}</Tag>
                       ))}

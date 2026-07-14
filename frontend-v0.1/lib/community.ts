@@ -171,3 +171,16 @@ export async function resolveReport(
   );
   return data as ReportOut;
 }
+
+/** T6.8 — admin dashboard summary. */
+export interface ModerationStats {
+  open_reports: number;
+  pending_posts: number;
+  auto_hidden_posts: number;
+  auto_hide_threshold: number;
+}
+
+export async function fetchModerationStats(): Promise<ModerationStats> {
+  const { data } = await api.get('/api/v1/community/moderation/stats');
+  return data as ModerationStats;
+}
