@@ -16,6 +16,7 @@ hits are held `pending` for admin review.
 """
 from __future__ import annotations
 
+import os
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -210,6 +211,46 @@ async def like_post(
 # ---------------------------------------------------------------------------
 # Admin — moderation queue + decisions
 # ---------------------------------------------------------------------------
+@router.get("/moderation/stats")
+async def moderation_stats(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Admin dashboard summary: open reports, pending posts, auto-hidden
+    posts (T6.8). O(3) queries; safe to hit from a polling widget.
+    """
+    _require_admin(user)
+    open_reports = (
+        await db.execute(
+            select(func.count()).select_from(CommunityReport).where(
+                CommunityReport.status == "open"
+            )
+        )
+    ).scalar_one()
+    pending_posts = (
+        await db.execute(
+            select(func.count()).select_from(CommunityPost).where(
+                CommunityPost.moderation_status == "pending"
+            )
+        )
+    ).scalar_one()
+    auto_hidden = (
+        await db.execute(
+            select(func.count()).select_from(CommunityPost).where(
+                (CommunityPost.moderation_status == "pending")
+                & (CommunityPost.moderation_reason.ilike("auto-hidden:%"))
+            )
+        )
+    ).scalar_one()
+    threshold = int(os.getenv("COMMUNITY_AUTO_HIDE_THRESHOLD", "3"))
+    return {
+        "open_reports": open_reports,
+        "pending_posts": pending_posts,
+        "auto_hidden_posts": auto_hidden,
+        "auto_hide_threshold": threshold,
+    }
+
+
 @router.get("/moderation/queue", response_model=PostList)
 async def moderation_queue(
     limit: int = Query(50, ge=1, le=200),
@@ -298,7 +339,30 @@ async def report_post(
         status="open",
     )
     db.add(report)
+    await db.flush()
+
+    # T6.8 auto-hide: once open-report count crosses AUTO_HIDE_THRESHOLD
+    # (default 3), demote an 'approved' post back to 'pending' so it
+    # disappears from the public feed until an admin reviews.
+    threshold = int(os.getenv("COMMUNITY_AUTO_HIDE_THRESHOLD", "3"))
+    if post.moderation_status == "approved":
+        open_count = (
+            await db.execute(
+                select(func.count()).select_from(CommunityReport).where(
+                    (CommunityReport.post_id == pid)
+                    & (CommunityReport.status == "open")
+                )
+            )
+        ).scalar_one()
+        if open_count >= threshold:
+            post.moderation_status = "pending"
+            post.moderation_reason = (
+                f"auto-hidden: {open_count} open reports "
+                f"(threshold={threshold})"
+            )
+
     await db.commit()
+    await db.refresh(report)
     return ReportOut.model_validate(report)
 
 
@@ -364,5 +428,34 @@ async def resolve_report(
             f"{report.note}\n{prefix}{payload.note}"
             if report.note else f"{prefix}{payload.note}"
         )
+
+    # T6.8: If resolving the last open report drops the count below the
+    # auto-hide threshold, restore the post to 'approved' (only if it
+    # was previously auto-hidden — never re-promote admin-rejected content).
+    threshold = int(os.getenv("COMMUNITY_AUTO_HIDE_THRESHOLD", "3"))
+    remaining = (
+        await db.execute(
+            select(func.count()).select_from(CommunityReport).where(
+                (CommunityReport.post_id == report.post_id)
+                & (CommunityReport.status == "open")
+                & (CommunityReport.id != report.id)
+            )
+        )
+    ).scalar_one()
+    if remaining < threshold:
+        post = (
+            await db.execute(
+                select(CommunityPost).where(CommunityPost.id == report.post_id)
+            )
+        ).scalar_one_or_none()
+        if (
+            post
+            and post.moderation_status == "pending"
+            and post.moderation_reason
+            and post.moderation_reason.startswith("auto-hidden:")
+        ):
+            post.moderation_status = "approved"
+            post.moderation_reason = None
+
     await db.commit()
     return ReportOut.model_validate(report)
