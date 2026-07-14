@@ -74,6 +74,9 @@ export default function ApprovalsPage() {
   const [signBusy, setSignBusy] = useState(false);
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
   const [form] = Form.useForm();
+  // T7.10 — client-side status filter for the table + hint for the
+  // export URLs so 'export CSV' and 'batch ZIP' honor the same view.
+  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
 
   const load = async () => {
     setLoading(true);
@@ -290,22 +293,50 @@ export default function ApprovalsPage() {
             >
               批量提交 {selected.length > 0 && `(${selected.length})`}
             </Button>
+            <Select
+              allowClear
+              style={{ width: 160 }}
+              placeholder="按状态过滤"
+              value={statusFilter}
+              onChange={(v) => setStatusFilter(v)}
+              options={[
+                { value: 'draft', label: '草稿' },
+                { value: 'in_review', label: '审批中' },
+                { value: 'approved', label: '已通过' },
+                { value: 'rejected', label: '已驳回' },
+                { value: 'cancelled', label: '已取消' },
+              ]}
+            />
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
               新建报备
             </Button>
             <Button
               icon={<DownloadOutlined />}
-              onClick={() => window.open(approvalsBatchCsvUrl(), '_blank')}
-              title="导出全部 approvals CSV（Excel 兼容 UTF-8 BOM，≤2000 行）"
+              onClick={() => window.open(
+                approvalsBatchCsvUrl(statusFilter ? { status: statusFilter } : {}),
+                '_blank',
+              )}
+              title={
+                statusFilter
+                  ? `导出 approvals CSV（当前状态过滤: ${statusFilter}）`
+                  : '导出全部 approvals CSV（Excel 兼容 UTF-8 BOM，≤2000 行）'
+              }
             >
-              导出 CSV
+              导出 CSV{statusFilter ? ` [${statusFilter}]` : ''}
             </Button>
             <Button
               icon={<FilePdfOutlined />}
-              onClick={() => window.open(approvalsCertificatesZipUrl(), '_blank')}
-              title="批量导出证书 PDF ZIP（≤200 份，附 INDEX.csv）"
+              onClick={() => window.open(
+                approvalsCertificatesZipUrl(statusFilter ? { status: statusFilter } : {}),
+                '_blank',
+              )}
+              title={
+                statusFilter
+                  ? `批量导出证书 ZIP（当前状态过滤: ${statusFilter}）`
+                  : '批量导出证书 PDF ZIP（≤200 份，附 INDEX.csv）'
+              }
             >
-              批量证书 ZIP
+              批量证书 ZIP{statusFilter ? ` [${statusFilter}]` : ''}
             </Button>
           </Space>
         </div>
@@ -314,7 +345,7 @@ export default function ApprovalsPage() {
           <Table
             rowKey="id"
             columns={columns as any}
-            dataSource={rows}
+            dataSource={statusFilter ? rows.filter((r) => r.status === statusFilter) : rows}
             loading={loading}
             pagination={{ pageSize: 20 }}
             size="small"
