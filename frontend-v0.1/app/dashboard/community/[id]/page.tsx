@@ -33,6 +33,7 @@ import {
 import {
   ArrowLeftOutlined,
   LikeOutlined,
+  LikeFilled,
   MessageOutlined,
   EyeOutlined,
   UserOutlined,
@@ -44,6 +45,7 @@ import {
   listCommunityComments,
   createCommunityComment,
   likeCommunityPost,
+  unlikeCommunityPost,
   reportPost,
   REPORT_REASONS,
   ReportReason,
@@ -123,10 +125,15 @@ export default function CommunityPostPage() {
     }
   };
 
+  // T6.17 — toggle like state based on post.liked_by_me. Both handlers
+  // return the fresh PostOut with the correct liked_by_me flag set, so
+  // the heart button flips immediately without a re-fetch.
   const handleLike = async () => {
     if (!post) return;
     try {
-      const p = await likeCommunityPost(post.id);
+      const p = post.liked_by_me
+        ? await unlikeCommunityPost(post.id)
+        : await likeCommunityPost(post.id);
       setPost(p);
     } catch (e: any) {
       message.error(`点赞失败: ${e?.response?.data?.detail ?? e.message}`);
@@ -264,8 +271,12 @@ export default function CommunityPostPage() {
         <Divider />
 
         <Space>
-          <Button icon={<LikeOutlined />} onClick={handleLike}>
-            点赞 {post.like_count > 0 ? `(${post.like_count})` : ''}
+          <Button
+            icon={post.liked_by_me ? <LikeFilled style={{ color: '#1677ff' }} /> : <LikeOutlined />}
+            type={post.liked_by_me ? 'primary' : 'default'}
+            onClick={handleLike}
+          >
+            {post.liked_by_me ? '已赞' : '点赞'} {post.like_count > 0 ? `(${post.like_count})` : ''}
           </Button>
           <Button
             onClick={() => {

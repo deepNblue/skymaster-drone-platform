@@ -22,6 +22,8 @@ export interface CommunityPost {
   comment_count: number;
   created_at: string;
   updated_at: string;
+  // T6.17 — populated by the API layer per caller.
+  liked_by_me?: boolean;
 }
 
 export interface CommunityComment {

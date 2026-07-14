@@ -33,6 +33,7 @@ import {
   FireOutlined,
   MessageOutlined,
   LikeOutlined,
+  LikeFilled,
   EyeOutlined,
   PushpinFilled,
   SafetyOutlined,
@@ -196,7 +197,12 @@ export default function CommunityListPage() {
                     <EyeOutlined /> {p.view_count}
                   </Space>,
                   <Space size={4} key="likes">
-                    <LikeOutlined /> {p.like_count}
+                    {p.liked_by_me ? (
+                      <LikeFilled style={{ color: '#1677ff' }} />
+                    ) : (
+                      <LikeOutlined />
+                    )}{' '}
+                    {p.like_count}
                   </Space>,
                   <Space size={4} key="cmts">
                     <MessageOutlined /> {p.comment_count}
