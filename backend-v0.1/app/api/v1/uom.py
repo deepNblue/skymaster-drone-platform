@@ -297,6 +297,76 @@ async def approve_report(rid: str, body: ReportApprove) -> dict:
     return _report_to_dict(r)
 
 
+# ---------------------------------------------------------------------------
+# T7.6 — UOM report export (CSV) for regulatory submissions
+# ---------------------------------------------------------------------------
+@router.get("/reports.csv")
+async def export_reports_csv(
+    status: Optional[str] = None,
+    operator_id: Optional[str] = None,
+):
+    """Return the current UOM reports as an RFC-4180 CSV, UTF-8 with BOM
+    so Excel on Windows opens it without mojibake. Regulators typically
+    want a spreadsheet, not JSON — this closes that gap without pulling
+    in openpyxl/pandas.
+
+    Columns match the JSON dict from ``_report_to_dict`` for parity.
+    Datetime fields are ISO-8601 (already dict-serialized upstream).
+    ``area_polygon`` is JSON-stringified to keep the CSV cell intact.
+    """
+    import csv
+    import io
+    import json
+
+    from fastapi.responses import Response
+    from app.services.uom_adapter import ReportStatus
+
+    status_enum = None
+    if status:
+        try:
+            status_enum = ReportStatus(status)
+        except ValueError:
+            raise HTTPException(400, f"invalid status={status!r}")
+    reports = await _adapter().list_all(
+        status=status_enum, operator_id=operator_id,
+    )
+
+    columns = [
+        "id", "operator_id", "pilot_name", "aircraft_reg", "purpose",
+        "area_polygon", "max_alt_m", "start_ts", "end_ts", "status",
+        "submitted_at", "reviewed_at", "reviewer", "reject_reason",
+        "approval_code",
+    ]
+
+    def _val(v):
+        if v is None:
+            return ""
+        if hasattr(v, "isoformat"):
+            return v.isoformat()
+        if isinstance(v, (list, tuple, dict)):
+            return json.dumps(v, ensure_ascii=False)
+        return str(v)
+
+    buf = io.StringIO()
+    # BOM so Excel autodetects UTF-8
+    buf.write("\ufeff")
+    writer = csv.writer(buf, quoting=csv.QUOTE_MINIMAL)
+    writer.writerow(columns)
+    for r in reports:
+        d = _report_to_dict(r)
+        writer.writerow([_val(d.get(c)) for c in columns])
+
+    body = buf.getvalue().encode("utf-8")
+    return Response(
+        content=body,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="uom_reports.csv"',
+            "X-Row-Count": str(len(reports)),
+        },
+    )
+
+
 @router.post("/reports/{rid}/reject")
 async def reject_report(rid: str, body: ReportReject) -> dict:
     try:
