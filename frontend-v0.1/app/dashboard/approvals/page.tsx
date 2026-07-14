@@ -17,7 +17,7 @@ import {
   listApprovals, getApproval, createApproval, submitApproval,
   previewRouting, decideAuthority, cancelApproval, markApprovalFlown,
   preflightCheck, type FlightApproval, type PreflightResult,
-  batchSubmitApprovals, secondApproveApproval,
+  batchSubmitApprovals, batchSecondApproveApprovals, secondApproveApproval,
   attachSignature, listSignatures, sha256Hex,
   approvalCertificatePdfUrl, verifyApproval,
   approvalsBatchCsvUrl, approvalsCertificatesZipUrl,
@@ -297,6 +297,73 @@ export default function ApprovalsPage() {
             >
               批量提交 {selected.length > 0 && `(${selected.length})`}
             </Button>
+            {/* T7.13 — batch 2nd-approval (supervisor/admin only, UI-side
+                guard: enabled when all selected rows are pending_second_approval). */}
+            {(() => {
+              const selectedRows = rows.filter((r) =>
+                selected.includes(String(r.id)) || selected.includes(r.id),
+              );
+              const allPendingSecond =
+                selectedRows.length > 0 &&
+                selectedRows.every((r) => r.status === 'pending_second_approval');
+              return (
+                <>
+                  <Button
+                    type="primary"
+                    loading={batching}
+                    disabled={!allPendingSecond}
+                    onClick={async () => {
+                      setBatching(true);
+                      try {
+                        const res = await batchSecondApproveApprovals(
+                          selectedRows.map((r) => String(r.id)),
+                          'approve',
+                          '批量放行 — supervisor',
+                          25.0,
+                        );
+                        message.success(
+                          `批量二审通过: ${res.approved} 成功 / ${res.rejected} 驳回 / ${res.failed} 失败`,
+                        );
+                        setSelected([]);
+                        load();
+                      } catch (e: any) {
+                        message.error(`批量二审失败: ${e?.response?.data?.detail ?? e.message}`);
+                      } finally {
+                        setBatching(false);
+                      }
+                    }}
+                  >
+                    批量二审通过 {allPendingSecond && `(${selectedRows.length})`}
+                  </Button>
+                  <Button
+                    danger
+                    loading={batching}
+                    disabled={!allPendingSecond}
+                    onClick={async () => {
+                      setBatching(true);
+                      try {
+                        const res = await batchSecondApproveApprovals(
+                          selectedRows.map((r) => String(r.id)),
+                          'reject',
+                          '批量驳回 — supervisor',
+                        );
+                        message.success(
+                          `批量二审驳回: ${res.rejected} 已驳回 / ${res.failed} 失败`,
+                        );
+                        setSelected([]);
+                        load();
+                      } catch (e: any) {
+                        message.error(`批量二审驳回失败: ${e?.response?.data?.detail ?? e.message}`);
+                      } finally {
+                        setBatching(false);
+                      }
+                    }}
+                  >
+                    批量二审驳回
+                  </Button>
+                </>
+              );
+            })()}
             <Select
               allowClear
               style={{ width: 160 }}
@@ -381,7 +448,7 @@ export default function ApprovalsPage() {
               selectedRowKeys: selected,
               onChange: setSelected,
               getCheckboxProps: (r: FlightApproval) => ({
-                disabled: r.status !== 'draft',
+                disabled: r.status !== 'draft' && r.status !== 'pending_second_approval',
               }),
             }}
           />
