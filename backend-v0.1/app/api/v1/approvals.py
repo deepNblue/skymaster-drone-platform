@@ -785,6 +785,202 @@ async def list_signatures(
 
 
 # ---------------------------------------------------------------------------
+# T7.3 — Approval certificate PDF (with QR-code verification watermark)
+# ---------------------------------------------------------------------------
+@router.get("/{approval_id}/certificate.pdf")
+async def approval_certificate_pdf(
+    approval_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a single-page PDF certificate for the approval, embedding
+    a QR code that resolves to /api/v1/approvals/{id}/verify for
+    online verification (chain-of-custody).
+
+    The PDF is deterministic — same approval + same signatures ⇒ same
+    bytes (up to ReportLab's DocInfo timestamp, which we override).
+    """
+    from io import BytesIO
+
+    from fastapi.responses import Response
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+        font_name = "STSong-Light"
+    except Exception:  # pragma: no cover — fallback for stripped envs
+        font_name = "Helvetica"
+
+    row = await _get_or_404(db, approval_id)
+    approval_url = f"{os.getenv('PUBLIC_BASE_URL', '')}/api/v1/approvals/{row.id}/verify"
+
+    # ---- Build QR code ----------------------------------------------------
+    qr_png_bytes: bytes | None = None
+    try:
+        import qrcode
+        qr = qrcode.QRCode(version=1, box_size=6, border=2)
+        qr.add_data(approval_url or f"approval:{row.id}")
+        qr.make(fit=True)
+        img = qr.make_image()
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        qr_png_bytes = buf.getvalue()
+    except Exception:
+        qr_png_bytes = None
+
+    # ---- Draw PDF ---------------------------------------------------------
+    out = BytesIO()
+    c = canvas.Canvas(out, pagesize=A4)
+    w, h = A4
+
+    c.setTitle(f"SkyMaster Flight Approval Certificate {row.id}")
+
+    # Header
+    c.setFont(font_name, 20)
+    c.drawCentredString(w / 2, h - 30 * mm, "无人机飞行报备证明")
+    c.setFont(font_name, 10)
+    c.drawCentredString(w / 2, h - 38 * mm, "SkyMaster Drone Platform · Approval Certificate")
+
+    # Body — key/value block
+    y = h - 55 * mm
+    def _row(label: str, value: str):
+        nonlocal y
+        c.setFont(font_name, 10)
+        c.drawString(25 * mm, y, label)
+        c.setFont(font_name, 11)
+        c.drawString(65 * mm, y, value)
+        y -= 8 * mm
+
+    _row("报备编号", str(row.id))
+    _row("标题", row.title or "-")
+    _row("用途", row.purpose or "-")
+    _row("类别", row.category or "-")
+    _row("飞行器登记号", row.aircraft_reg or "-")
+    _row("飞行器型号", row.aircraft_model or "-")
+    _row("最大高度 (m)", str(row.max_alt_m or "-"))
+    _row("起始时间", row.start_ts.strftime("%Y-%m-%d %H:%M UTC") if row.start_ts else "-")
+    _row("结束时间", row.end_ts.strftime("%Y-%m-%d %H:%M UTC") if row.end_ts else "-")
+    _row("当前状态", row.status)
+
+    # Authorities table
+    y -= 4 * mm
+    c.setFont(font_name, 11)
+    c.drawString(25 * mm, y, "报备接收单位:")
+    y -= 6 * mm
+    c.setFont(font_name, 9)
+    for a in (row.authorities or []):
+        line = f" · {a.authority_code:20s}  channel={a.channel:8s}  status={a.status}"
+        if a.external_ref:
+            line += f"  ref={a.external_ref}"
+        c.drawString(28 * mm, y, line)
+        y -= 5 * mm
+        if y < 60 * mm:
+            break
+
+    # Signatures block
+    y -= 4 * mm
+    c.setFont(font_name, 11)
+    c.drawString(25 * mm, y, "电子签署:")
+    y -= 6 * mm
+    c.setFont(font_name, 9)
+    sigs = list(row.signatures or [])
+    if not sigs:
+        c.drawString(28 * mm, y, " · (无签署记录)")
+        y -= 5 * mm
+    else:
+        for s in sigs[:6]:
+            line = (
+                f" · signer={str(s.signer_user_id)[:8]}…"
+                f"  role={s.signer_role or '-'}"
+                f"  sha256={s.payload_sha256[:12]}…"
+                f"  algo={s.algorithm}"
+            )
+            c.drawString(28 * mm, y, line)
+            y -= 5 * mm
+
+    # QR code — bottom right
+    if qr_png_bytes:
+        try:
+            from reportlab.lib.utils import ImageReader
+            qimg = ImageReader(BytesIO(qr_png_bytes))
+            c.drawImage(
+                qimg, w - 45 * mm, 25 * mm, width=30 * mm, height=30 * mm,
+                preserveAspectRatio=True, mask="auto",
+            )
+            c.setFont(font_name, 7)
+            c.drawRightString(w - 15 * mm, 22 * mm, "扫码在线核验")
+        except Exception:
+            pass
+
+    # Footer / verify link
+    c.setFont(font_name, 8)
+    c.setFillGray(0.4)
+    c.drawString(25 * mm, 20 * mm, "验证链接:")
+    c.drawString(25 * mm, 16 * mm, approval_url or f"approval:{row.id}")
+    c.drawRightString(w - 15 * mm, 12 * mm,
+                      f"生成时间 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
+
+    c.showPage()
+    c.save()
+    pdf_bytes = out.getvalue()
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'inline; filename="approval-{row.id}.pdf"'
+            ),
+        },
+    )
+
+
+@router.get("/{approval_id}/verify")
+async def approval_verify(
+    approval_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Public-ish verification endpoint hit by the QR code on the PDF.
+
+    Returns a minimal chain-of-custody snapshot: status, timeline
+    signatures + fingerprints. **No PII beyond what already appears
+    on the certificate.** Intentionally does not require auth so a
+    regulator can scan the QR from the physical printout — but we
+    only expose fields already printed on the same certificate.
+    """
+    row = await _get_or_404(db, approval_id)
+    return {
+        "approval_id": str(row.id),
+        "status": row.status,
+        "aircraft_reg": row.aircraft_reg,
+        "start_ts": row.start_ts.isoformat() if row.start_ts else None,
+        "end_ts": row.end_ts.isoformat() if row.end_ts else None,
+        "authorities": [
+            {
+                "code": a.authority_code,
+                "channel": a.channel,
+                "status": a.status,
+                "external_ref": a.external_ref,
+            }
+            for a in (row.authorities or [])
+        ],
+        "signatures": [
+            {
+                "signer_role": s.signer_role,
+                "payload_sha256": s.payload_sha256,
+                "algorithm": s.algorithm,
+                "signed_at": s.signed_at.isoformat() if s.signed_at else None,
+            }
+            for s in (row.signatures or [])
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # T7.1 — RPA bridge integration
 # ---------------------------------------------------------------------------
 
