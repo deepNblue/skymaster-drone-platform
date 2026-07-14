@@ -819,7 +819,36 @@ export async function batchSubmitApprovals(
     '/api/v1/approvals/batch-submit',
     { approval_ids: approvalIds, aircraft_weight_kg: weight },
   );
-  return data as BatchSubmitResponse;
+  return data as {
+    submitted: number;
+    held_for_second_approval: number;
+    failed: number;
+    results: { approval_id: string; ok: boolean; status?: string; error?: string }[];
+  };
+}
+
+/** T7.13 — batch second-approval decision. */
+export async function batchSecondApproveApprovals(
+  approvalIds: string[],
+  decision: 'approve' | 'reject',
+  note?: string,
+  weight?: number,
+) {
+  const { data } = await api.post(
+    '/api/v1/approvals/batch-second-approval',
+    {
+      approval_ids: approvalIds,
+      decision,
+      note,
+      aircraft_weight_kg: weight,
+    },
+  );
+  return data as {
+    approved: number;
+    rejected: number;
+    failed: number;
+    results: { approval_id: string; ok: boolean; status?: string; error?: string }[];
+  };
 }
 
 export async function attachSignature(

@@ -17,6 +17,7 @@ hits are held `pending` for admin review.
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -26,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.deps import get_current_user
-from app.models.community import CommunityComment, CommunityPost, CommunityReport
+from app.models.community import CommunityAppeal, CommunityComment, CommunityPost, CommunityReport
 from app.models.user import User
 from app.schemas.community import (
     CommentCreate,
@@ -140,10 +141,29 @@ async def list_posts(
         CommunityPost.created_at.desc(),
     ).limit(limit).offset(offset)
     rows = (await db.execute(stmt)).scalars().all()
-    return PostList(
-        total=total,
-        items=[PostOut.model_validate(p) for p in rows],
-    )
+
+    # T6.17 — bulk-fetch which of these posts the caller has liked,
+    # in a single query, then decorate each PostOut. Avoids the N+1
+    # round-trip that a per-row lookup would need.
+    liked_ids: set[UUID] = set()
+    if rows:
+        from app.models.community import CommunityLike
+        liked_rows = (
+            await db.execute(
+                select(CommunityLike.post_id).where(
+                    CommunityLike.user_id == user.id,
+                    CommunityLike.post_id.in_([p.id for p in rows]),
+                )
+            )
+        ).scalars().all()
+        liked_ids = set(liked_rows)
+
+    items = []
+    for p in rows:
+        out = PostOut.model_validate(p)
+        out.liked_by_me = p.id in liked_ids
+        items.append(out)
+    return PostList(total=total, items=items)
 
 
 @router.get("/posts/{pid}", response_model=PostOut)
@@ -167,7 +187,19 @@ async def get_post(
     # Best-effort view counter (non-blocking, race-tolerant).
     post.view_count = (post.view_count or 0) + 1
     await db.commit()
-    return PostOut.model_validate(post)
+    # T6.17 — annotate liked_by_me on the single-post detail response.
+    from app.models.community import CommunityLike
+    liked = (
+        await db.execute(
+            select(CommunityLike.id).where(
+                CommunityLike.post_id == pid,
+                CommunityLike.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    out = PostOut.model_validate(post)
+    out.liked_by_me = liked is not None
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +286,9 @@ async def like_post(
         db.add(CommunityLike(post_id=pid, user_id=user.id))
         post.like_count = (post.like_count or 0) + 1
         await db.commit()
-    return PostOut.model_validate(post)
+    out = PostOut.model_validate(post)
+    out.liked_by_me = True
+    return out
 
 
 @router.delete("/posts/{pid}/like", response_model=PostOut)
@@ -285,7 +319,9 @@ async def unlike_post(
         await db.delete(existing)
         post.like_count = max((post.like_count or 0) - 1, 0)
         await db.commit()
-    return PostOut.model_validate(post)
+    out = PostOut.model_validate(post)
+    out.liked_by_me = False
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +442,190 @@ async def pin_post(
     post.pinned = bool(payload.pinned)
     await db.commit()
     return PostOut.model_validate(post)
+
+
+# ---------------------------------------------------------------------------
+# T6.16 — author appeal against auto-hide
+# ---------------------------------------------------------------------------
+class AppealCreate(BaseModel):
+    note: str | None = None
+
+
+class AppealOut(BaseModel):
+    model_config = {"from_attributes": True}
+    id: UUID
+    post_id: UUID
+    author_id: UUID
+    note: str | None
+    status: str
+    reviewed_by: UUID | None
+    reviewed_at: datetime | None
+    review_note: str | None
+    created_at: datetime
+
+
+class AppealDecision(BaseModel):
+    action: str  # 'uphold' | 'overturn'
+    review_note: str | None = None
+
+
+class AppealList(BaseModel):
+    items: list[AppealOut]
+    total: int
+
+
+@router.post(
+    "/posts/{pid}/appeal",
+    response_model=AppealOut,
+    status_code=201,
+)
+async def create_appeal(
+    pid: UUID,
+    payload: AppealCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> AppealOut:
+    """Post author submits an appeal against an auto-hide.
+
+    Preconditions:
+      * Post exists.
+      * Post is currently 'pending' with an auto-hide reason (i.e. it
+        was demoted by T6.8/T6.11, not by a human admin rejecting it).
+      * Caller is the post's author.
+      * No existing 'pending' appeal for this post (409).
+    """
+    post = (
+        await db.execute(select(CommunityPost).where(CommunityPost.id == pid))
+    ).scalar_one_or_none()
+    if not post:
+        raise HTTPException(status_code=404, detail="post not found")
+    if post.author_id != user.id:
+        raise HTTPException(
+            status_code=403, detail="only the post author can appeal",
+        )
+    if post.moderation_status != "pending" or not (
+        post.moderation_reason or ""
+    ).startswith("auto-hidden"):
+        raise HTTPException(
+            status_code=409,
+            detail="post is not currently auto-hidden",
+        )
+    existing = (
+        await db.execute(
+            select(CommunityAppeal).where(
+                CommunityAppeal.post_id == pid,
+                CommunityAppeal.status == "pending",
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(
+            status_code=409, detail="a pending appeal already exists",
+        )
+    appeal = CommunityAppeal(
+        post_id=pid,
+        author_id=user.id,
+        note=payload.note,
+        status="pending",
+    )
+    db.add(appeal)
+    await db.commit()
+    await db.refresh(appeal)
+    return AppealOut.model_validate(appeal)
+
+
+@router.get("/moderation/appeals", response_model=AppealList)
+async def list_appeals(
+    status_filter: str | None = Query(None, alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> AppealList:
+    """Admin queue of appeals."""
+    _require_admin(user)
+    stmt = select(CommunityAppeal).order_by(CommunityAppeal.created_at.desc())
+    count_stmt = select(func.count(CommunityAppeal.id))
+    if status_filter:
+        stmt = stmt.where(CommunityAppeal.status == status_filter)
+        count_stmt = count_stmt.where(CommunityAppeal.status == status_filter)
+    stmt = stmt.limit(limit).offset(offset)
+    rows = (await db.execute(stmt)).scalars().all()
+    total = (await db.execute(count_stmt)).scalar_one()
+    return AppealList(
+        items=[AppealOut.model_validate(r) for r in rows],
+        total=total,
+    )
+
+
+@router.post(
+    "/moderation/appeals/{aid}/resolve",
+    response_model=AppealOut,
+)
+async def resolve_appeal(
+    aid: UUID,
+    payload: AppealDecision,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> AppealOut:
+    """Admin resolves an appeal.
+
+    * uphold → appeal.status='upheld' (keep hidden), no side effects.
+    * overturn → appeal.status='overturned':
+        - Restore post.moderation_status='approved'
+        - Auto-dismiss the open reports on this post (so their reporters
+          take a T6.11 rep hit for the false-positive report).
+        - Clear moderation_reason.
+    """
+    from datetime import datetime, timezone
+
+    _require_admin(user)
+    if payload.action not in ("uphold", "overturn"):
+        raise HTTPException(status_code=422, detail="invalid action")
+    appeal = (
+        await db.execute(
+            select(CommunityAppeal).where(CommunityAppeal.id == aid)
+        )
+    ).scalar_one_or_none()
+    if appeal is None:
+        raise HTTPException(status_code=404, detail="appeal not found")
+    if appeal.status != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=f"appeal already {appeal.status}",
+        )
+    appeal.reviewed_by = user.id
+    appeal.reviewed_at = datetime.now(timezone.utc)
+    appeal.review_note = payload.review_note
+    if payload.action == "uphold":
+        appeal.status = "upheld"
+    else:
+        appeal.status = "overturned"
+        # Restore the post
+        post = (
+            await db.execute(
+                select(CommunityPost).where(CommunityPost.id == appeal.post_id)
+            )
+        ).scalar_one_or_none()
+        if post is not None:
+            post.moderation_status = "approved"
+            post.moderation_reason = None
+        # Auto-dismiss the open reports so their reporters take a rep hit
+        open_reports = (
+            await db.execute(
+                select(CommunityReport).where(
+                    CommunityReport.post_id == appeal.post_id,
+                    CommunityReport.status == "open",
+                )
+            )
+        ).scalars().all()
+        for r in open_reports:
+            r.status = "dismissed"
+            r.resolved_by = user.id
+            r.resolved_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(appeal)
+    return AppealOut.model_validate(appeal)
 
 
 # ---------------------------------------------------------------------------

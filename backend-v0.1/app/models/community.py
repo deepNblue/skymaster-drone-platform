@@ -177,3 +177,49 @@ class CommunityLike(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class CommunityAppeal(Base):
+    """T6.16 — Appeal against an auto-hide decision.
+
+    When T6.8 auto-hide (or T6.11 weighted variant) demotes an
+    'approved' post back to 'pending', the author can appeal.
+    Admin reviews via /moderation/appeals/{id}/resolve:
+      * uphold  → post stays hidden; reporters keep their rep score.
+      * overturn → post restored to 'approved'; the reporters whose
+                   open reports triggered the hide take a rep hit
+                   (their reports get marked 'dismissed' automatically).
+
+    Enforces one active appeal per post (unique on post_id where
+    status='pending'). Reopening after 'uphold' requires a new appeal
+    row → keeps admin history intact.
+    """
+
+    __tablename__ = "community_appeals"
+
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    post_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("community_posts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    author_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=False, index=True
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending"
+    )
+    reviewed_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=True
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

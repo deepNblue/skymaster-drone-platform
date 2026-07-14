@@ -31,6 +31,10 @@ class PostOut(BaseModel):
     comment_count: int
     created_at: datetime
     updated_at: datetime
+    # T6.17 — populated by the API layer, not the ORM row. Signals
+    # whether the current caller has liked this post so the frontend
+    # can render the correct heart state without a second round trip.
+    liked_by_me: bool = False
 
 
 class PostList(BaseModel):

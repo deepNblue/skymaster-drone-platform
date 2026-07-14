@@ -164,6 +164,34 @@ class BatchSubmitResponse(BaseModel):
     results: list[BatchSubmitResult]
 
 
+class BatchSecondApprovalBody(BaseModel):
+    """T7.13 — batch second-approval decision.
+
+    Supervisor multi-selects pending_second_approval rows from the
+    dashboard and applies one decision to all in a single call. Each
+    row is processed independently — a fan-out failure on approval #3
+    does not roll back approvals #1 and #2.
+    """
+    approval_ids: list[UUID] = Field(..., min_length=1, max_length=50)
+    decision: str = Field(..., pattern="^(approve|reject)$")
+    note: Optional[str] = Field(default=None, max_length=1000)
+    aircraft_weight_kg: Optional[float] = None
+
+
+class BatchSecondApprovalResult(BaseModel):
+    approval_id: UUID
+    ok: bool
+    status: Optional[str] = None
+    error: Optional[str] = None
+
+
+class BatchSecondApprovalResponse(BaseModel):
+    approved: int
+    rejected: int
+    failed: int
+    results: list[BatchSecondApprovalResult]
+
+
 class SignatureIn(BaseModel):
     authority_code: Optional[str] = None
     payload_sha256: str = Field(..., min_length=64, max_length=64,
@@ -979,6 +1007,127 @@ async def batch_submit(
     return BatchSubmitResponse(
         submitted=submitted,
         held_for_second_approval=held,
+        failed=failed,
+        results=results,
+    )
+
+
+# ---------------------------------------------------------------------------
+# T7.13 — batch second-approval
+# ---------------------------------------------------------------------------
+@router.post(
+    "/batch-second-approval",
+    response_model=BatchSecondApprovalResponse,
+)
+async def batch_second_approval(
+    body: BatchSecondApprovalBody,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BatchSecondApprovalResponse:
+    """Supervisor makes a batch decision on ≤50 approvals.
+
+    Behaves as a loop over the single-row second-approval logic:
+      * approve → fan-out to routed authorities (in_review).
+      * reject  → return to draft with a timeline note.
+    Each row succeeds/fails independently; the aggregate response
+    lists per-approval outcomes so the frontend can highlight rows
+    that didn't apply (e.g. no longer in pending_second_approval).
+    """
+    if getattr(user, "role", None) not in {"admin", "supervisor"}:
+        raise HTTPException(
+            403, "only admin/supervisor can grant second approval",
+        )
+    results: list[BatchSecondApprovalResult] = []
+    approved = rejected = failed = 0
+    now = datetime.now(tz=timezone.utc)
+
+    for aid in body.approval_ids:
+        try:
+            row = (await db.execute(
+                select(FlightApproval).where(FlightApproval.id == aid)
+            )).scalar_one_or_none()
+            if not row:
+                failed += 1
+                results.append(BatchSecondApprovalResult(
+                    approval_id=aid, ok=False, error="not found",
+                ))
+                continue
+            if row.status != "pending_second_approval":
+                failed += 1
+                results.append(BatchSecondApprovalResult(
+                    approval_id=aid, ok=False,
+                    error=f"status={row.status!r}, not pending_second_approval",
+                ))
+                continue
+
+            row.second_approver_id = user.id
+            row.second_approved_at = now
+
+            if body.decision == "reject":
+                row.status = "draft"
+                row.requires_second_approval = False
+                row.updated_at = now
+                row.timeline = (row.timeline or []) + [
+                    _timeline_event(
+                        str(user.id), "second_approval_rejected",
+                        f"[batch] {body.note or 'returned to draft'}",
+                    )
+                ]
+                rejected += 1
+                results.append(BatchSecondApprovalResult(
+                    approval_id=aid, ok=True, status="draft",
+                ))
+                continue
+
+            # Approve → fan-out
+            routed = route_authorities(
+                polygon=row.area_polygon,
+                max_alt_m=row.max_alt_m,
+                purpose=row.purpose,
+                aircraft_weight_kg=body.aircraft_weight_kg,
+                category=row.category,
+            )
+            if not routed:
+                failed += 1
+                results.append(BatchSecondApprovalResult(
+                    approval_id=aid, ok=False,
+                    error="no applicable authority",
+                ))
+                continue
+
+            for spec in routed:
+                db.add(FlightApprovalAuthority(
+                    approval_id=row.id,
+                    authority_code=spec["code"],
+                    authority_name=spec["name"],
+                    channel=spec["channel"],
+                    priority=spec["priority"],
+                    status="submitted" if spec["channel"] == "api" else "pending",
+                    submitted_at=now if spec["channel"] == "api" else None,
+                    extra={"reason": spec.get("reason")},
+                ))
+            row.status = "in_review"
+            row.updated_at = now
+            row.timeline = (row.timeline or []) + [
+                _timeline_event(
+                    str(user.id), "second_approval_granted",
+                    f"[batch] {body.note or f'fan-out {len(routed)} authorities'}",
+                )
+            ]
+            approved += 1
+            results.append(BatchSecondApprovalResult(
+                approval_id=aid, ok=True, status="in_review",
+            ))
+        except Exception as e:  # pragma: no cover
+            failed += 1
+            results.append(BatchSecondApprovalResult(
+                approval_id=aid, ok=False, error=str(e)[:200],
+            ))
+
+    await db.commit()
+    return BatchSecondApprovalResponse(
+        approved=approved,
+        rejected=rejected,
         failed=failed,
         results=results,
     )
