@@ -840,6 +840,39 @@ export async function listSignatures(id: string) {
   return data as ApprovalSignature[];
 }
 
+/** T7.4 — Absolute URL for the approval certificate PDF endpoint.
+ *
+ * Not a fetch — we hand this to <a href> / window.open so the browser
+ * downloads/opens the PDF with its native viewer.
+ */
+export function approvalCertificatePdfUrl(id: string): string {
+  return `${baseURL}/api/v1/approvals/${id}/certificate.pdf`;
+}
+
+/** T7.4 — Public verify snapshot (what the QR on the PDF points to). */
+export async function verifyApproval(id: string) {
+  const { data } = await api.get(`/api/v1/approvals/${id}/verify`);
+  return data as {
+    approval_id: string;
+    status: string;
+    aircraft_reg: string | null;
+    start_ts: string | null;
+    end_ts: string | null;
+    authorities: {
+      code: string;
+      channel: string;
+      status: string;
+      external_ref: string | null;
+    }[];
+    signatures: {
+      signer_role: string | null;
+      payload_sha256: string;
+      algorithm: string;
+      signed_at: string | null;
+    }[];
+  };
+}
+
 /** Compute SHA-256 of a UTF-8 string in the browser via SubtleCrypto. */
 export async function sha256Hex(text: string): Promise<string> {
   const enc = new TextEncoder().encode(text);

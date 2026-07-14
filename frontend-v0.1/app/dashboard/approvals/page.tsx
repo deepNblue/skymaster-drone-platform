@@ -9,7 +9,7 @@ import {
 import {
   PlusOutlined, SendOutlined, CheckCircleOutlined, CloseCircleOutlined,
   RocketOutlined, ClockCircleOutlined, StopOutlined, ReloadOutlined,
-  SafetyCertificateOutlined,
+  SafetyCertificateOutlined, FilePdfOutlined, QrcodeOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import {
@@ -18,6 +18,7 @@ import {
   preflightCheck, type FlightApproval, type PreflightResult,
   batchSubmitApprovals, secondApproveApproval,
   attachSignature, listSignatures, sha256Hex,
+  approvalCertificatePdfUrl, verifyApproval,
   type ApprovalSignature,
 } from '@/lib/api';
 
@@ -581,7 +582,41 @@ export default function ApprovalsPage() {
               <SafetyCertificateOutlined /> 电子签署
             </Divider>
             <Space direction="vertical" size="small" style={{ width: '100%' }}>
-              <Space>
+              <Space wrap>
+                <Button
+                  size="small"
+                  icon={<FilePdfOutlined />}
+                  onClick={() => {
+                    window.open(approvalCertificatePdfUrl(detail.id), '_blank');
+                  }}
+                >
+                  下载证书 PDF
+                </Button>
+                <Button
+                  size="small"
+                  icon={<QrcodeOutlined />}
+                  onClick={async () => {
+                    try {
+                      const v = await verifyApproval(detail.id);
+                      Modal.info({
+                        title: '在线核验快照 (QR verify)',
+                        width: 640,
+                        content: (
+                          <pre style={{
+                            maxHeight: 400, overflow: 'auto',
+                            fontSize: 12, background: '#fafafa', padding: 8,
+                          }}>
+                            {JSON.stringify(v, null, 2)}
+                          </pre>
+                        ),
+                      });
+                    } catch (e: any) {
+                      message.error('核验失败: ' + (e?.message ?? e));
+                    }
+                  }}
+                >
+                  在线核验
+                </Button>
                 <Button
                   size="small"
                   icon={<SafetyCertificateOutlined />}
