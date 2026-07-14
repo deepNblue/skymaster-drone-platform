@@ -87,6 +87,8 @@ class AuthorityRow(BaseModel):
     responded_at: Optional[datetime]
     reject_reason: Optional[str]
     priority: int
+    # T7.5 — free-form JSON dict from bridges (RPA job id, driver, …)
+    extra: Optional[dict] = None
 
     class Config:
         from_attributes = True

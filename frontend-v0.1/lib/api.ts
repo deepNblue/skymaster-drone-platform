@@ -673,6 +673,9 @@ export interface ApprovalAuthorityRow {
   responded_at?: string;
   reject_reason?: string;
   priority: number;
+  /** T7.5 — free-form JSON dict populated by RPA bridge etc.
+   *  Known keys: rpa_job_id, driver. */
+  extra?: Record<string, unknown> | null;
 }
 
 export interface FlightApproval {
@@ -840,11 +843,39 @@ export async function listSignatures(id: string) {
   return data as ApprovalSignature[];
 }
 
-/** T7.4 — Absolute URL for the approval certificate PDF endpoint.
- *
- * Not a fetch — we hand this to <a href> / window.open so the browser
- * downloads/opens the PDF with its native viewer.
- */
+/** T7.5 — RPA bridge integration. */
+export interface RPAJobOut {
+  job_id: string;
+  approval_id: string;
+  authority_code: string;
+  driver: string;
+  status: string;               // queued|submitted|approving|approved|rejected|cancelled|error
+  external_ref: string | null;
+  reject_reason: string | null;
+  poll_count: number;
+  created_at: number;
+  updated_at: number;
+}
+
+/** POST /approvals/{id}/rpa-dispatch — idempotent per (approval, authority). */
+export async function dispatchRpa(
+  approvalId: string,
+  authorityCode: string,
+): Promise<RPAJobOut> {
+  const { data } = await api.post(
+    `/api/v1/approvals/${approvalId}/rpa-dispatch`,
+    { authority_code: authorityCode },
+  );
+  return data as RPAJobOut;
+}
+
+/** GET /approvals/rpa-jobs/{jobId} — polls the bridge; may advance status. */
+export async function pollRpaJob(jobId: string): Promise<RPAJobOut> {
+  const { data } = await api.get(`/api/v1/approvals/rpa-jobs/${jobId}`);
+  return data as RPAJobOut;
+}
+
+/** T7.3 — Absolute URL for the approval certificate PDF endpoint. */
 export function approvalCertificatePdfUrl(id: string): string {
   return `${baseURL}/api/v1/approvals/${id}/certificate.pdf`;
 }

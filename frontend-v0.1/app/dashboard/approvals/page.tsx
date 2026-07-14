@@ -10,6 +10,7 @@ import {
   PlusOutlined, SendOutlined, CheckCircleOutlined, CloseCircleOutlined,
   RocketOutlined, ClockCircleOutlined, StopOutlined, ReloadOutlined,
   SafetyCertificateOutlined, FilePdfOutlined, QrcodeOutlined,
+  RobotOutlined, ThunderboltOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import {
@@ -19,7 +20,8 @@ import {
   batchSubmitApprovals, secondApproveApproval,
   attachSignature, listSignatures, sha256Hex,
   approvalCertificatePdfUrl, verifyApproval,
-  type ApprovalSignature,
+  dispatchRpa, pollRpaJob,
+  type ApprovalSignature, type RPAJobOut,
 } from '@/lib/api';
 
 const { Title, Text } = Typography;
@@ -497,10 +499,14 @@ export default function ApprovalsPage() {
               size="small"
               dataSource={detail.authorities}
               locale={{ emptyText: '尚未提交，无主管路由' }}
-              renderItem={(a) => (
+              renderItem={(a) => {
+                const rpaJobId = (a.extra as any)?.rpa_job_id as string | undefined;
+                const isRpa = a.channel === 'rpa';
+                const canDispatch = isRpa && !['approved', 'rejected', 'skipped', 'cancelled'].includes(a.status);
+                return (
                 <List.Item
-                  actions={
-                    detail.status === 'in_review' &&
+                  actions={[
+                    ...(detail.status === 'in_review' &&
                     !['approved', 'rejected', 'skipped'].includes(a.status)
                       ? [
                           <Button
@@ -519,16 +525,61 @@ export default function ApprovalsPage() {
                             onClick={() => onDecide(a.authority_code, 'rejected')}
                           >驳回</Button>,
                         ]
-                      : []
-                  }
+                      : []),
+                    ...(canDispatch
+                      ? [
+                          <Button
+                            key="rpa"
+                            size="small"
+                            type="link"
+                            icon={<RobotOutlined />}
+                            onClick={async () => {
+                              try {
+                                const j = await dispatchRpa(detail.id, a.authority_code);
+                                message.success(
+                                  `RPA 派发 ${j.driver} · 状态=${j.status}${j.external_ref ? ' · ref=' + j.external_ref : ''}`,
+                                );
+                                await loadDetail(detail.id);
+                              } catch (e: any) {
+                                message.error('RPA 派发失败: ' + (e?.response?.data?.detail ?? e.message));
+                              }
+                            }}
+                          >派发 RPA</Button>,
+                          rpaJobId ? (
+                            <Button
+                              key="poll"
+                              size="small"
+                              type="link"
+                              icon={<ThunderboltOutlined />}
+                              onClick={async () => {
+                                try {
+                                  const j = await pollRpaJob(rpaJobId!);
+                                  message.info(
+                                    `job=${j.job_id.slice(0,10)}… 状态=${j.status} poll#${j.poll_count}`,
+                                  );
+                                  await loadDetail(detail.id);
+                                } catch (e: any) {
+                                  message.error('轮询失败: ' + (e?.response?.data?.detail ?? e.message));
+                                }
+                              }}
+                            >轮询</Button>
+                          ) : null,
+                        ].filter(Boolean) as any[]
+                      : []),
+                  ]}
                 >
-                  <Space>
+                  <Space wrap>
                     <Tag>P{a.priority}</Tag>
                     <span>{a.authority_name}</span>
                     <Tag color={AUTHORITY_STATUS_COLOR[a.status] || 'default'}>
                       {a.status}
                     </Tag>
                     <Tag>{a.channel}</Tag>
+                    {isRpa && rpaJobId && (
+                      <Tag color="geekblue" icon={<RobotOutlined />}>
+                        RPA job {rpaJobId.slice(0, 8)}…
+                      </Tag>
+                    )}
                     {a.external_ref && (
                       <Text type="secondary" style={{ fontSize: 12 }}>{a.external_ref}</Text>
                     )}
@@ -537,7 +588,7 @@ export default function ApprovalsPage() {
                     )}
                   </Space>
                 </List.Item>
-              )}
+              );}}
             />
 
             <Divider style={{ margin: 0 }}>
