@@ -12,7 +12,7 @@ import {
   SafetyCertificateOutlined, FilePdfOutlined, QrcodeOutlined,
   RobotOutlined, ThunderboltOutlined, DownloadOutlined,
 } from '@ant-design/icons';
-import dayjs from 'dayjs';
+import dayjs, { type Dayjs } from 'dayjs';
 import {
   listApprovals, getApproval, createApproval, submitApproval,
   previewRouting, decideAuthority, cancelApproval, markApprovalFlown,
@@ -77,6 +77,10 @@ export default function ApprovalsPage() {
   // T7.10 — client-side status filter for the table + hint for the
   // export URLs so 'export CSV' and 'batch ZIP' honor the same view.
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
+  // T7.12 — date range filter for the export URLs. Applies server-side
+  // via created_from / created_to; the table itself is not filtered
+  // (no created_at column shown in the current UI).
+  const [exportRange, setExportRange] = useState<[Dayjs, Dayjs] | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -307,36 +311,60 @@ export default function ApprovalsPage() {
                 { value: 'cancelled', label: '已取消' },
               ]}
             />
+            <DatePicker.RangePicker
+              value={exportRange as any}
+              onChange={(v) => setExportRange(v as any)}
+              placeholder={['导出起始', '导出结束']}
+              title="仅影响导出，不过滤下方表格"
+            />
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
               新建报备
             </Button>
             <Button
               icon={<DownloadOutlined />}
-              onClick={() => window.open(
-                approvalsBatchCsvUrl(statusFilter ? { status: statusFilter } : {}),
-                '_blank',
-              )}
+              onClick={() => {
+                const opts: {
+                  status?: string;
+                  created_from?: string;
+                  created_to?: string;
+                } = {};
+                if (statusFilter) opts.status = statusFilter;
+                if (exportRange) {
+                  opts.created_from = exportRange[0].startOf('day').toISOString();
+                  opts.created_to = exportRange[1].endOf('day').toISOString();
+                }
+                window.open(approvalsBatchCsvUrl(opts), '_blank');
+              }}
               title={
-                statusFilter
-                  ? `导出 approvals CSV（当前状态过滤: ${statusFilter}）`
+                statusFilter || exportRange
+                  ? `导出 approvals CSV${statusFilter ? ` [${statusFilter}]` : ''}${exportRange ? ` [${exportRange[0].format('MM-DD')}~${exportRange[1].format('MM-DD')}]` : ''}`
                   : '导出全部 approvals CSV（Excel 兼容 UTF-8 BOM，≤2000 行）'
               }
             >
-              导出 CSV{statusFilter ? ` [${statusFilter}]` : ''}
+              导出 CSV{statusFilter ? ` [${statusFilter}]` : ''}{exportRange ? ' 📅' : ''}
             </Button>
             <Button
               icon={<FilePdfOutlined />}
-              onClick={() => window.open(
-                approvalsCertificatesZipUrl(statusFilter ? { status: statusFilter } : {}),
-                '_blank',
-              )}
+              onClick={() => {
+                const opts: {
+                  status?: string;
+                  created_from?: string;
+                  created_to?: string;
+                } = {};
+                if (statusFilter) opts.status = statusFilter;
+                if (exportRange) {
+                  opts.created_from = exportRange[0].startOf('day').toISOString();
+                  opts.created_to = exportRange[1].endOf('day').toISOString();
+                }
+                window.open(approvalsCertificatesZipUrl(opts), '_blank');
+              }}
               title={
-                statusFilter
-                  ? `批量导出证书 ZIP（当前状态过滤: ${statusFilter}）`
+                statusFilter || exportRange
+                  ? `批量证书 ZIP${statusFilter ? ` [${statusFilter}]` : ''}${exportRange ? ` [${exportRange[0].format('MM-DD')}~${exportRange[1].format('MM-DD')}]` : ''}`
                   : '批量导出证书 PDF ZIP（≤200 份，附 INDEX.csv）'
               }
             >
-              批量证书 ZIP{statusFilter ? ` [${statusFilter}]` : ''}
+              批量证书 ZIP{statusFilter ? ` [${statusFilter}]` : ''}{exportRange ? ' 📅' : ''}
             </Button>
           </Space>
         </div>

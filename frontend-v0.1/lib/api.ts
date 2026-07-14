@@ -896,10 +896,14 @@ export function uomReportsCsvUrl(opts?: {
 export function approvalsBatchCsvUrl(opts?: {
   status?: string;
   limit?: number;
+  created_from?: string;
+  created_to?: string;
 }): string {
   const qs = new URLSearchParams();
   if (opts?.status) qs.set('status', opts.status);
   if (opts?.limit) qs.set('limit', String(opts.limit));
+  if (opts?.created_from) qs.set('created_from', opts.created_from);
+  if (opts?.created_to) qs.set('created_to', opts.created_to);
   const q = qs.toString();
   return `${baseURL}/api/v1/approvals/export.csv${q ? '?' + q : ''}`;
 }
@@ -908,10 +912,14 @@ export function approvalsBatchCsvUrl(opts?: {
 export function approvalsCertificatesZipUrl(opts?: {
   status?: string;
   limit?: number;
+  created_from?: string;
+  created_to?: string;
 }): string {
   const qs = new URLSearchParams();
   if (opts?.status) qs.set('status', opts.status);
   if (opts?.limit) qs.set('limit', String(opts.limit));
+  if (opts?.created_from) qs.set('created_from', opts.created_from);
+  if (opts?.created_to) qs.set('created_to', opts.created_to);
   const q = qs.toString();
   return `${baseURL}/api/v1/approvals/export/certificates.zip${q ? '?' + q : ''}`;
 }
