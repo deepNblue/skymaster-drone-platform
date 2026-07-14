@@ -23,6 +23,7 @@ from app.models.drone import Drone
 from app.models.mission import Mission
 from app.models.vision_copilot import VisionDetection
 from app.models.community import CommunityPost
+from app.models.flight_approval import FlightApproval, FlightApprovalAuthority
 from app.models.model_marketplace import (
     ModelDeployment, ModelListing, ModelUsageEvent, ModelVersion,
 )
@@ -131,6 +132,27 @@ class SearchCommunityArgs(BaseModel):
                        description="Case-insensitive substring to search in "
                                    "post titles + bodies")
     limit: int = Field(10, ge=1, le=50)
+
+
+class DispatchRpaAuthorityArgs(BaseModel):
+    approval_id: str = Field(
+        ..., description="UUID of the FlightApproval whose authority row "
+                         "to dispatch. Must belong to the current org."
+    )
+    authority_code: str = Field(
+        ..., min_length=1, max_length=32,
+        description="Authority row to submit — e.g. 'local_police', "
+                    "'tourism', 'shenzhen_atc'.",
+    )
+
+
+class ListApprovalsArgs(BaseModel):
+    status: str | None = Field(
+        None, max_length=32,
+        description="Optional status filter: draft | pending_second_approval "
+                    "| in_review | approved | rejected.",
+    )
+    limit: int = Field(20, ge=1, le=100)
 
 
 class DetectionStatsArgs(BaseModel):
@@ -477,6 +499,132 @@ async def search_community(
     }
 
 
+# ---------------------------------------------------------------------------
+# T5.5 — Flight approval + RPA bridge tools
+# ---------------------------------------------------------------------------
+async def list_approvals(
+    ctx: ToolContext, args: ListApprovalsArgs,
+) -> dict[str, Any]:
+    """List recent flight-approval requests for the current org.
+
+    Tenant-scoped: only returns approvals whose ``org_id`` matches
+    ``ctx.org_id`` (guardrail — the Copilot must never leak cross-org
+    approval data).
+    """
+    if ctx.db is None:
+        return {"approvals": [], "reason": "no db session"}
+    if ctx.org_id is None:
+        return {"approvals": [], "reason": "no org context"}
+
+    stmt = select(FlightApproval).where(FlightApproval.tenant_id == ctx.org_id)
+    if args.status:
+        stmt = stmt.where(FlightApproval.status == args.status)
+    stmt = stmt.order_by(FlightApproval.created_at.desc()).limit(args.limit)
+    rows = (await ctx.db.execute(stmt)).scalars().all()
+    return {
+        "count": len(rows),
+        "approvals": [
+            {
+                "id": str(a.id),
+                "title": a.title,
+                "status": a.status,
+                "aircraft_reg": a.aircraft_reg,
+                "max_alt_m": a.max_alt_m,
+                "second_approved_at": (
+                    a.second_approved_at.isoformat()
+                    if a.second_approved_at else None
+                ),
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+            }
+            for a in rows
+        ],
+    }
+
+
+async def dispatch_rpa_authority(
+    ctx: ToolContext, args: DispatchRpaAuthorityArgs,
+) -> dict[str, Any]:
+    """Dispatch (or return-existing) an RPA job for one authority row.
+
+    This is the AI-facing wrapper around the T7.1 bridge. It reuses the
+    same idempotency + tenant scoping rules as the HTTP endpoint:
+    * approval must belong to ctx.org_id
+    * the named authority row must have channel='rpa'
+    * a repeat call with the same (approval, authority) yields the
+      same job_id
+    """
+    from app.services.rpa_bridge import get_bridge
+
+    if ctx.db is None or ctx.org_id is None:
+        return {"ok": False, "reason": "no db/org context"}
+    try:
+        approval_uuid = UUID(args.approval_id)
+    except ValueError:
+        return {"ok": False, "reason": "invalid approval_id"}
+
+    approval = (
+        await ctx.db.execute(
+            select(FlightApproval).where(
+                (FlightApproval.id == approval_uuid)
+                & (FlightApproval.tenant_id == ctx.org_id)
+            )
+        )
+    ).scalar_one_or_none()
+    if approval is None:
+        return {"ok": False, "reason": "approval not found in this org"}
+
+    target = next(
+        (a for a in approval.authorities
+         if a.authority_code == args.authority_code),
+        None,
+    )
+    if target is None:
+        return {
+            "ok": False,
+            "reason": f"authority {args.authority_code!r} not on this approval",
+        }
+    if target.channel != "rpa":
+        return {
+            "ok": False,
+            "reason": f"authority uses channel {target.channel!r}, not 'rpa'",
+        }
+
+    bridge = get_bridge()
+    payload = {
+        "title": approval.title,
+        "purpose": approval.purpose,
+        "pilot_name": approval.pilot_name,
+        "aircraft_reg": approval.aircraft_reg,
+        "aircraft_model": approval.aircraft_model,
+        "area_polygon": approval.area_polygon,
+        "max_alt_m": approval.max_alt_m,
+        "start_ts": approval.start_ts.isoformat() if approval.start_ts else None,
+        "end_ts": approval.end_ts.isoformat() if approval.end_ts else None,
+    }
+    job = await bridge.dispatch(str(approval.id), args.authority_code, payload)
+
+    # Sync the authority row so a subsequent list_approvals call reflects
+    # the new external_ref/status.
+    from datetime import datetime, timezone
+    now = datetime.now(tz=timezone.utc)
+    target.status = job.status
+    target.submitted_at = target.submitted_at or now
+    target.external_ref = job.external_ref
+    target.extra = {
+        **(target.extra or {}),
+        "rpa_job_id": job.job_id,
+        "driver": job.driver,
+    }
+    await ctx.db.commit()
+    return {
+        "ok": True,
+        "job_id": job.job_id,
+        "driver": job.driver,
+        "status": job.status,
+        "external_ref": job.external_ref,
+    }
+
+
 async def detection_stats(
     ctx: ToolContext, args: DetectionStatsArgs,
 ) -> dict[str, Any]:
@@ -703,6 +851,36 @@ def build_default_registry() -> ToolRegistry:
             func=search_community,  # type: ignore[arg-type]
         )
     )
+    # ---- T5.5 · Flight approval + RPA dispatch (sensitive) ---------
+    r.register(
+        ToolSpec(
+            name="dispatch_rpa_authority",
+            description=(
+                "Dispatch an RPA (browser-bot) submission for one authority "
+                "row on an approval. Only works when the authority row has "
+                "channel='rpa' (typical: local police, tourism bureau, "
+                "provincial ATC). Idempotent: calling twice with the same "
+                "(approval_id, authority_code) returns the same job. "
+                "Requires user approval before execution."
+            ),
+            args_schema=DispatchRpaAuthorityArgs,
+            func=dispatch_rpa_authority,  # type: ignore[arg-type]
+            permission="sensitive",
+        )
+    )
+    r.register(
+        ToolSpec(
+            name="list_approvals",
+            description=(
+                "List recent flight-approval requests for the current org, "
+                "optionally filtered by status (draft | pending_second_approval "
+                "| in_review | approved | rejected). Read-only. Use when the "
+                "user asks 'show my pending flight approvals'."
+            ),
+            args_schema=ListApprovalsArgs,
+            func=list_approvals,  # type: ignore[arg-type]
+        )
+    )
     return r
 
 
@@ -724,4 +902,6 @@ __all__ = [
     "detection_stats",
     "list_installed_models",
     "search_community",
+    "list_approvals",
+    "dispatch_rpa_authority",
 ]
