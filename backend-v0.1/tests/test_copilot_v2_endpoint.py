@@ -30,18 +30,22 @@ async def test_copilot_v2_rejects_unknown_session(client):
     """Bogus session_id → 404."""
     from app.db import engine
     Sess = async_sessionmaker(engine, expire_on_commit=False)
+    email = f"cv2_reject+{uuid4().hex[:8]}@x.com"
+    user_id = uuid4()
+    org_id = uuid4()
     async with Sess() as s:
         s.add(User(
-            id=uuid4(), email="cv2_reject@x.com",
+            id=user_id, email=email,
             hashed_pw=hash_password("StrongPassW0rd#"),
-            role="operator", org_id=uuid4(),
+            role="operator", org_id=org_id,
         ))
         await s.commit()
-    r = await client.post(
-        "/api/v1/auth/login",
-        json={"email": "cv2_reject@x.com", "password": "StrongPassW0rd#"},
+    # Bypass /login (susceptible to shared-state rate-limit residue when
+    # tests are run in a suite context) — mint the token directly.
+    from app.services.auth import create_access_token
+    tok = create_access_token(
+        user_id=user_id, org_id=org_id, role="operator",
     )
-    tok = r.json()["access_token"]
 
     fake_sid = str(uuid4())
     # httpx.AsyncClient POST — SSE endpoint returns 404 before streaming starts
