@@ -10,7 +10,7 @@ import {
   PlusOutlined, SendOutlined, CheckCircleOutlined, CloseCircleOutlined,
   RocketOutlined, ClockCircleOutlined, StopOutlined, ReloadOutlined,
   SafetyCertificateOutlined, FilePdfOutlined, QrcodeOutlined,
-  RobotOutlined, ThunderboltOutlined,
+  RobotOutlined, ThunderboltOutlined, DownloadOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import {
@@ -20,6 +20,7 @@ import {
   batchSubmitApprovals, secondApproveApproval,
   attachSignature, listSignatures, sha256Hex,
   approvalCertificatePdfUrl, verifyApproval,
+  approvalsBatchCsvUrl, approvalsCertificatesZipUrl,
   dispatchRpa, pollRpaJob,
   type ApprovalSignature, type RPAJobOut,
 } from '@/lib/api';
@@ -291,6 +292,20 @@ export default function ApprovalsPage() {
             </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
               新建报备
+            </Button>
+            <Button
+              icon={<DownloadOutlined />}
+              onClick={() => window.open(approvalsBatchCsvUrl(), '_blank')}
+              title="导出全部 approvals CSV（Excel 兼容 UTF-8 BOM，≤2000 行）"
+            >
+              导出 CSV
+            </Button>
+            <Button
+              icon={<FilePdfOutlined />}
+              onClick={() => window.open(approvalsCertificatesZipUrl(), '_blank')}
+              title="批量导出证书 PDF ZIP（≤200 份，附 INDEX.csv）"
+            >
+              批量证书 ZIP
             </Button>
           </Space>
         </div>

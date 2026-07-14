@@ -892,6 +892,30 @@ export function uomReportsCsvUrl(opts?: {
   return `${baseURL}/api/v1/uom/reports.csv${q ? '?' + q : ''}`;
 }
 
+/** T7.9 — Absolute URL for the flat approvals CSV export. */
+export function approvalsBatchCsvUrl(opts?: {
+  status?: string;
+  limit?: number;
+}): string {
+  const qs = new URLSearchParams();
+  if (opts?.status) qs.set('status', opts.status);
+  if (opts?.limit) qs.set('limit', String(opts.limit));
+  const q = qs.toString();
+  return `${baseURL}/api/v1/approvals/export.csv${q ? '?' + q : ''}`;
+}
+
+/** T7.9 — Absolute URL for the approval certificates ZIP export. */
+export function approvalsCertificatesZipUrl(opts?: {
+  status?: string;
+  limit?: number;
+}): string {
+  const qs = new URLSearchParams();
+  if (opts?.status) qs.set('status', opts.status);
+  if (opts?.limit) qs.set('limit', String(opts.limit));
+  const q = qs.toString();
+  return `${baseURL}/api/v1/approvals/export/certificates.zip${q ? '?' + q : ''}`;
+}
+
 /** T7.4 — Public verify snapshot (what the QR on the PDF points to). */
 export async function verifyApproval(id: string) {
   const { data } = await api.get(`/api/v1/approvals/${id}/verify`);
