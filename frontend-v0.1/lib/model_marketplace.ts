@@ -65,6 +65,19 @@ export interface UsageSummary {
   by_outcome: Record<string, number>;
 }
 
+export interface UsageDailyPoint {
+  day: string; // YYYY-MM-DD UTC
+  total_units: number;
+  by_outcome: Record<string, number>;
+}
+
+export interface UsageDailySeries {
+  deployment_id: string;
+  since_days: number;
+  quota_calls_per_day: number | null;
+  points: UsageDailyPoint[];
+}
+
 export interface ListingPage {
   total: number;
   items: ModelListing[];
@@ -141,4 +154,14 @@ export async function getUsageSummary(
     params: { since_days },
   });
   return data as UsageSummary;
+}
+
+export async function getUsageDaily(
+  did: string,
+  since_days = 30,
+): Promise<UsageDailySeries> {
+  const { data } = await api.get(`${BASE}/deployments/${did}/usage-daily`, {
+    params: { since_days },
+  });
+  return data as UsageDailySeries;
 }

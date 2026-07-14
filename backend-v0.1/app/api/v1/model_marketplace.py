@@ -41,7 +41,7 @@ from app.models.user import User
 from app.schemas.model_marketplace import (
     DeploymentCreate, DeploymentOut,
     ListingCreate, ListingOut, ListingPage,
-    UsageRecord, UsageSummary,
+    UsageDailyPoint, UsageDailySeries, UsageRecord, UsageSummary,
     VersionCreate, VersionOut, VersionReview,
 )
 
@@ -421,4 +421,78 @@ async def usage_summary(
         since_days=since_days,
         total_units=sum(by_outcome.values()),
         by_outcome=by_outcome,
+    )
+
+
+# ---------------------------------------------------------------------------
+# T6.6 — daily rollup for the usage dashboard
+# ---------------------------------------------------------------------------
+@router.get(
+    "/deployments/{did}/usage-daily", response_model=UsageDailySeries,
+)
+async def usage_daily(
+    did: UUID,
+    since_days: int = Query(30, ge=1, le=90),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> UsageDailySeries:
+    """Daily usage rollup grouped by (day, outcome).
+
+    Backfills missing days with 0 so the frontend can draw a continuous
+    line/bar chart without gap handling. UTC-day boundaries.
+    """
+    dep = (await db.execute(
+        select(ModelDeployment).where(ModelDeployment.id == did)
+    )).scalar_one_or_none()
+    if not dep:
+        raise HTTPException(status_code=404, detail="deployment not found")
+    org_id = getattr(user, "org_id", None)
+    if dep.org_id != org_id and getattr(user, "role", None) != "admin":
+        raise HTTPException(status_code=403, detail="cross-org access forbidden")
+
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=since_days)
+    # Use func.date to bucket per-day; portable across SQLite + PG.
+    day_expr = func.date(ModelUsageEvent.created_at).label("day")
+    rows = (await db.execute(
+        select(
+            day_expr,
+            ModelUsageEvent.outcome,
+            func.coalesce(func.sum(ModelUsageEvent.units), 0),
+        )
+        .where(
+            and_(
+                ModelUsageEvent.deployment_id == did,
+                ModelUsageEvent.created_at >= since,
+            )
+        )
+        .group_by(day_expr, ModelUsageEvent.outcome)
+    )).all()
+
+    # Fold rows into {day_str: {outcome: units}}.
+    buckets: dict[str, dict[str, int]] = {}
+    for day, outcome, total in rows:
+        day_s = day.isoformat() if hasattr(day, "isoformat") else str(day)
+        buckets.setdefault(day_s, {})[outcome] = int(total)
+
+    # Backfill each day in the window so the frontend sees a continuous
+    # series (from 'since' up to today, inclusive).
+    points: list[UsageDailyPoint] = []
+    cursor = since.date()
+    end_day = now.date()
+    while cursor <= end_day:
+        key = cursor.isoformat()
+        by_outcome = buckets.get(key, {})
+        points.append(UsageDailyPoint(
+            day=key,
+            total_units=sum(by_outcome.values()),
+            by_outcome=by_outcome,
+        ))
+        cursor = cursor + timedelta(days=1)
+
+    return UsageDailySeries(
+        deployment_id=did,
+        since_days=since_days,
+        quota_calls_per_day=dep.quota_calls_per_day,
+        points=points,
     )

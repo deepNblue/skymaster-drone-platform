@@ -128,3 +128,19 @@ class UsageSummary(BaseModel):
     since_days: int
     total_units: int
     by_outcome: dict[str, int]
+
+
+class UsageDailyPoint(BaseModel):
+    """One day's rollup for a deployment. `day` is UTC-midnight ISO date."""
+
+    day: str  # 'YYYY-MM-DD' UTC
+    total_units: int
+    by_outcome: dict[str, int]
+
+
+class UsageDailySeries(BaseModel):
+    deployment_id: UUID
+    since_days: int
+    quota_calls_per_day: int | None
+    points: list[UsageDailyPoint]
+

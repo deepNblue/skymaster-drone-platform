@@ -157,6 +157,21 @@ export default function ModelMarketplacePage() {
     { title: '日配额', dataIndex: 'quota_calls_per_day', render: (v) => v ?? '无限' },
     { title: '安装于', dataIndex: 'installed_at',
       render: (t) => new Date(t).toLocaleDateString('zh-CN') },
+    {
+      title: '操作', key: 'ops', width: 120,
+      render: (_, row) => (
+        <Button
+          size="small"
+          onClick={() =>
+            router.push(
+              `/dashboard/model-marketplace/deployments/${row.id}/usage`,
+            )
+          }
+        >
+          用量
+        </Button>
+      ),
+    },
   ];
 
   return (
