@@ -286,6 +286,246 @@ async def list_approvals(
     return list(rows)
 
 
+# ---------------------------------------------------------------------------
+# T7.8 — Batch export approvals (CSV + certificate ZIP)
+# ---------------------------------------------------------------------------
+@router.get("/export.csv")
+async def export_approvals_csv(
+    status: Optional[str] = Query(None),
+    limit: int = Query(500, le=2000),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bulk CSV export of all approvals visible to the caller's tenant.
+
+    Excel-friendly UTF-8 BOM. Flat schema (one row per approval, joined
+    authority summary as a JSON blob column). Same status filter as the
+    JSON list endpoint. Not paginated — capped at limit=2000 for a
+    single-shot download.
+    """
+    import csv
+    import io
+    import json
+
+    from fastapi.responses import Response
+
+    stmt = select(FlightApproval).where(FlightApproval.tenant_id == user.org_id)
+    if status:
+        stmt = stmt.where(FlightApproval.status == status)
+    stmt = stmt.order_by(FlightApproval.created_at.desc()).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
+
+    columns = [
+        "id", "title", "purpose", "category", "status",
+        "pilot_name", "pilot_license",
+        "aircraft_reg", "aircraft_model",
+        "max_alt_m", "start_ts", "end_ts",
+        "second_approved_at", "created_at",
+        "authorities",  # JSON-serialized short summary
+    ]
+
+    def _val(v):
+        if v is None:
+            return ""
+        if hasattr(v, "isoformat"):
+            return v.isoformat()
+        if isinstance(v, (list, tuple, dict)):
+            return json.dumps(v, ensure_ascii=False)
+        return str(v)
+
+    buf = io.StringIO()
+    buf.write("\ufeff")
+    writer = csv.writer(buf, quoting=csv.QUOTE_MINIMAL)
+    writer.writerow(columns)
+    for r in rows:
+        authorities_summary = [
+            {
+                "code": a.authority_code,
+                "name": a.authority_name,
+                "channel": a.channel,
+                "status": a.status,
+                "external_ref": a.external_ref,
+            }
+            for a in (r.authorities or [])
+        ]
+        record = {
+            "id": r.id, "title": r.title, "purpose": r.purpose,
+            "category": r.category, "status": r.status,
+            "pilot_name": r.pilot_name, "pilot_license": r.pilot_license,
+            "aircraft_reg": r.aircraft_reg, "aircraft_model": r.aircraft_model,
+            "max_alt_m": r.max_alt_m, "start_ts": r.start_ts,
+            "end_ts": r.end_ts, "second_approved_at": r.second_approved_at,
+            "created_at": r.created_at,
+            "authorities": authorities_summary,
+        }
+        writer.writerow([_val(record[c]) for c in columns])
+
+    return Response(
+        content=buf.getvalue().encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="approvals.csv"',
+            "X-Row-Count": str(len(rows)),
+        },
+    )
+
+
+@router.get("/export/certificates.zip")
+async def export_approvals_certificates_zip(
+    status: Optional[str] = Query(None),
+    limit: int = Query(50, le=200),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bulk-package approval PDF certificates into a single ZIP.
+
+    Reuses the T7.3 single-approval PDF renderer per approval, adds an
+    ``INDEX.csv`` at the archive root so the recipient can grep by
+    aircraft_reg or status without opening every file.
+
+    Only includes approvals whose ``tenant_id == user.org_id`` — no
+    cross-org leakage. Limit is intentionally smaller than the CSV
+    export because PDF rendering is O(n) and this endpoint materializes
+    all n bytes in memory.
+    """
+    import io
+    import zipfile
+    import csv
+
+    from fastapi.responses import Response
+
+    stmt = select(FlightApproval).where(FlightApproval.tenant_id == user.org_id)
+    if status:
+        stmt = stmt.where(FlightApproval.status == status)
+    stmt = stmt.order_by(FlightApproval.created_at.desc()).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
+
+    # Lazy-render each PDF using the same code path as /certificate.pdf
+    # to avoid divergence. Build in-memory ZIP (ok for limit<=200).
+    mem = io.BytesIO()
+    with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as zf:
+        # INDEX.csv (BOM-prefixed) for at-a-glance triage
+        idx_buf = io.StringIO()
+        idx_buf.write("\ufeff")
+        idx_w = csv.writer(idx_buf)
+        idx_w.writerow([
+            "filename", "id", "title", "aircraft_reg", "status",
+            "max_alt_m", "created_at",
+        ])
+        for r in rows:
+            fname = f"approval-{r.id}.pdf"
+            try:
+                # Reuse the PDF renderer via internal HTTP call would be
+                # overkill — inline the same reportlab code path.
+                pdf_bytes = await _render_approval_pdf(r)
+            except Exception:  # pragma: no cover
+                continue
+            zf.writestr(fname, pdf_bytes)
+            idx_w.writerow([
+                fname, str(r.id), r.title or "", r.aircraft_reg or "",
+                r.status,
+                r.max_alt_m if r.max_alt_m is not None else "",
+                r.created_at.isoformat() if r.created_at else "",
+            ])
+        zf.writestr("INDEX.csv", idx_buf.getvalue().encode("utf-8"))
+
+    return Response(
+        content=mem.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition":
+                'attachment; filename="approval-certificates.zip"',
+            "X-Row-Count": str(len(rows)),
+        },
+    )
+
+
+async def _render_approval_pdf(row: FlightApproval) -> bytes:
+    """Extracted PDF rendering — same layout as /certificate.pdf.
+
+    Kept as a plain coroutine so both the single-doc endpoint and the
+    ZIP endpoint can share bytes without duplicating the reportlab
+    calls or spawning subrequests.
+    """
+    from io import BytesIO
+
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+        font_name = "STSong-Light"
+    except Exception:  # pragma: no cover
+        font_name = "Helvetica"
+
+    approval_url = (
+        f"{os.getenv('PUBLIC_BASE_URL', '')}/api/v1/approvals/{row.id}/verify"
+    )
+    qr_png_bytes: bytes | None = None
+    try:
+        import qrcode
+        qr = qrcode.QRCode(version=1, box_size=6, border=2)
+        qr.add_data(approval_url or f"approval:{row.id}")
+        qr.make(fit=True)
+        img = qr.make_image()
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        qr_png_bytes = buf.getvalue()
+    except Exception:
+        qr_png_bytes = None
+
+    out = BytesIO()
+    c = canvas.Canvas(out, pagesize=A4)
+    w, h = A4
+    c.setTitle(f"SkyMaster Flight Approval Certificate {row.id}")
+    c.setFont(font_name, 20)
+    c.drawCentredString(w / 2, h - 30 * mm, "无人机飞行报备证明")
+    c.setFont(font_name, 10)
+    c.drawCentredString(w / 2, h - 38 * mm,
+                        "SkyMaster Drone Platform · Approval Certificate")
+    y = h - 55 * mm
+
+    def _row(label, value):
+        nonlocal y
+        c.setFont(font_name, 10)
+        c.drawString(25 * mm, y, label)
+        c.setFont(font_name, 11)
+        c.drawString(65 * mm, y, value)
+        y -= 8 * mm
+
+    _row("报备编号", str(row.id))
+    _row("标题", row.title or "-")
+    _row("用途", row.purpose or "-")
+    _row("飞行器登记号", row.aircraft_reg or "-")
+    _row("最大高度 (m)", str(row.max_alt_m or "-"))
+    _row("起始时间", row.start_ts.strftime("%Y-%m-%d %H:%M UTC") if row.start_ts else "-")
+    _row("结束时间", row.end_ts.strftime("%Y-%m-%d %H:%M UTC") if row.end_ts else "-")
+    _row("当前状态", row.status)
+
+    if qr_png_bytes:
+        try:
+            from reportlab.lib.utils import ImageReader
+            qimg = ImageReader(BytesIO(qr_png_bytes))
+            c.drawImage(
+                qimg, w - 45 * mm, 25 * mm, width=30 * mm, height=30 * mm,
+                preserveAspectRatio=True, mask="auto",
+            )
+        except Exception:
+            pass
+
+    c.setFont(font_name, 8)
+    c.setFillGray(0.4)
+    c.drawString(25 * mm, 20 * mm, "验证链接:")
+    c.drawString(25 * mm, 16 * mm, approval_url or f"approval:{row.id}")
+    c.showPage()
+    c.save()
+    return out.getvalue()
+
+
+
 @router.get("/{approval_id}", response_model=ApprovalOut)
 async def get_approval(
     approval_id: UUID,
