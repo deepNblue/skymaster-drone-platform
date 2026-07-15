@@ -258,6 +258,23 @@ export async function getMyReputation(): Promise<MyReputation> {
   return data as MyReputation;
 }
 
+// T6.22 — self-view engagement stats
+export interface MyCommunityStats {
+  posts_total: number;
+  posts_by_status: Record<string, number>;
+  posts_approved: number;
+  posts_pending: number;
+  posts_rejected: number;
+  comments_made: number;
+  likes_given: number;
+  likes_received: number;
+}
+
+export async function getMyCommunityStats(): Promise<MyCommunityStats> {
+  const { data } = await api.get('/api/v1/community/me/stats');
+  return data as MyCommunityStats;
+}
+
 export async function fetchModerationStats(): Promise<ModerationStats> {
   const { data } = await api.get('/api/v1/community/moderation/stats');
   return data as ModerationStats;

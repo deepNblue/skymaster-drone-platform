@@ -1011,6 +1011,58 @@ async def get_my_reputation(
     }
 
 
+@router.get("/me/stats")
+async def get_my_community_stats(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """T6.22 — engagement counters for the caller.
+
+    Cheap self-surface for a profile header: total posts (by status),
+    comments made, likes given, and inbound like count on my posts.
+    All counts are computed via aggregation, no row-scanning.
+    """
+    # Post counts by moderation status
+    post_rows = (await db.execute(
+        select(CommunityPost.moderation_status, func.count(CommunityPost.id))
+        .where(CommunityPost.author_id == user.id)
+        .group_by(CommunityPost.moderation_status)
+    )).all()
+    post_counts = {s or "unknown": int(c) for s, c in post_rows}
+
+    # Comments the user has authored
+    my_comments = (await db.execute(
+        select(func.count(CommunityComment.id))
+        .where(CommunityComment.author_id == user.id)
+    )).scalar_one()
+
+    # Likes the user has given
+    from app.models.community import CommunityLike
+    likes_given = (await db.execute(
+        select(func.count(CommunityLike.id))
+        .where(CommunityLike.user_id == user.id)
+    )).scalar_one()
+
+    # Inbound likes — likes on posts authored by the user. Needs a
+    # subquery to filter by author_id on the join target.
+    likes_recv = (await db.execute(
+        select(func.count(CommunityLike.id))
+        .join(CommunityPost, CommunityPost.id == CommunityLike.post_id)
+        .where(CommunityPost.author_id == user.id)
+    )).scalar_one()
+
+    return {
+        "posts_total": sum(post_counts.values()),
+        "posts_by_status": post_counts,
+        "posts_approved": post_counts.get("approved", 0),
+        "posts_pending": post_counts.get("pending", 0),
+        "posts_rejected": post_counts.get("rejected", 0),
+        "comments_made": int(my_comments or 0),
+        "likes_given": int(likes_given or 0),
+        "likes_received": int(likes_recv or 0),
+    }
+
+
 
 @router.post(
     "/moderation/reports/{rid}/resolve",

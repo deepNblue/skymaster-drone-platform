@@ -16,8 +16,10 @@ import { FireOutlined } from '@ant-design/icons';
 import {
   listMyPosts,
   getMyReputation,
+  getMyCommunityStats,
   type CommunityPost,
   type MyReputation,
+  type MyCommunityStats,
 } from '@/lib/community';
 
 const { Title, Text } = Typography;
@@ -35,9 +37,12 @@ export default function MyPostsPage() {
   const [filter, setFilter] = useState<'all' | 'approved' | 'pending' | 'rejected'>('all');
   // T6.21 — my reputation is loaded once on mount, silent on failure
   const [rep, setRep] = useState<MyReputation | null>(null);
+  // T6.22 — engagement stats card
+  const [stats, setStats] = useState<MyCommunityStats | null>(null);
 
   useEffect(() => {
     getMyReputation().then(setRep).catch(() => setRep(null));
+    getMyCommunityStats().then(setStats).catch(() => setStats(null));
   }, []);
 
   useEffect(() => {
@@ -102,6 +107,49 @@ export default function MyPostsPage() {
       </div>
 
       <Card size="small">
+        {/* T6.22 — engagement stats strip */}
+        {stats && (
+          <div style={{
+            marginBottom: 12,
+            display: 'flex',
+            gap: 24,
+            flexWrap: 'wrap',
+            padding: '8px 12px',
+            background: '#fafafa',
+            borderRadius: 4,
+          }}>
+            <div>
+              <div style={{ fontSize: 12, color: '#8c8c8c' }}>发帖总数</div>
+              <div style={{ fontSize: 20, fontWeight: 500 }}>{stats.posts_total}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: '#8c8c8c' }}>已发布</div>
+              <div style={{ fontSize: 20, fontWeight: 500, color: '#52c41a' }}>
+                {stats.posts_approved}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: '#8c8c8c' }}>待审核</div>
+              <div style={{ fontSize: 20, fontWeight: 500, color: '#faad14' }}>
+                {stats.posts_pending}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: '#8c8c8c' }}>评论数</div>
+              <div style={{ fontSize: 20, fontWeight: 500 }}>{stats.comments_made}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: '#8c8c8c' }}>我点赞</div>
+              <div style={{ fontSize: 20, fontWeight: 500 }}>{stats.likes_given}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: '#8c8c8c' }}>获赞数</div>
+              <div style={{ fontSize: 20, fontWeight: 500, color: '#1677ff' }}>
+                {stats.likes_received}
+              </div>
+            </div>
+          </div>
+        )}
         {/* T6.21 — reporter reputation banner. Colour-coded by label so
             trusted reporters get positive reinforcement and suspects
             see why their reports are being weighted down. */}
