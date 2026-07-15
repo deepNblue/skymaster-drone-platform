@@ -222,6 +222,16 @@ export interface ModerationStats {
   top_reasons_7d?: { reason: string; count: number }[];
 }
 
+export async function listTrendingPosts(
+  windowHours = 24,
+  limit = 20,
+): Promise<PostList> {
+  const { data } = await api.get('/api/v1/community/posts/trending', {
+    params: { window_hours: windowHours, limit },
+  });
+  return data as PostList;
+}
+
 export async function fetchModerationStats(): Promise<ModerationStats> {
   const { data } = await api.get('/api/v1/community/moderation/stats');
   return data as ModerationStats;

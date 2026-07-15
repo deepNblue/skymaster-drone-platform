@@ -166,6 +166,67 @@ async def list_posts(
     return PostList(total=total, items=items)
 
 
+@router.get("/posts/trending", response_model=PostList)
+async def list_trending_posts(
+    window_hours: int = Query(24, ge=1, le=168),
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> PostList:
+    """T6.19 — trending posts ordered by a lightweight hotness score.
+
+    Score = 2 * like_count + comment_count, restricted to approved posts
+    created within ``window_hours`` (default 24h). Pinned posts are
+    excluded so the trending strip doesn't just parrot the pinned tray.
+
+    Tenant scoping mirrors ``list_posts``.
+    """
+    from datetime import datetime, timedelta, timezone as _tz
+
+    cutoff = datetime.now(_tz.utc) - timedelta(hours=window_hours)
+    stmt = select(CommunityPost).where(
+        CommunityPost.moderation_status == "approved",
+        CommunityPost.pinned.is_(False),
+        CommunityPost.created_at >= cutoff,
+    )
+    org_id = getattr(user, "org_id", None)
+    if org_id is not None:
+        stmt = stmt.where(
+            (CommunityPost.tenant_id.is_(None))
+            | (CommunityPost.tenant_id == org_id)
+        )
+    # Hotness score is expressible in pure SQL — no post-hoc Python sort.
+    hotness = (
+        (CommunityPost.like_count * 2) + CommunityPost.comment_count
+    )
+    stmt = stmt.order_by(
+        hotness.desc(),
+        CommunityPost.created_at.desc(),
+    ).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
+
+    liked_ids: set[UUID] = set()
+    if rows:
+        from app.models.community import CommunityLike
+
+        liked_rows = (
+            await db.execute(
+                select(CommunityLike.post_id).where(
+                    CommunityLike.user_id == user.id,
+                    CommunityLike.post_id.in_([p.id for p in rows]),
+                )
+            )
+        ).scalars().all()
+        liked_ids = set(liked_rows)
+
+    items = []
+    for p in rows:
+        out = PostOut.model_validate(p)
+        out.liked_by_me = p.id in liked_ids
+        items.append(out)
+    return PostList(total=len(items), items=items)
+
+
 @router.get("/posts/{pid}", response_model=PostOut)
 async def get_post(
     pid: UUID,

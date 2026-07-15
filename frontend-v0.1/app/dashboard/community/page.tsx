@@ -40,6 +40,7 @@ import {
 } from '@ant-design/icons';
 import {
   listCommunityPosts,
+  listTrendingPosts,
   createCommunityPost,
   CommunityPost,
   ModerationStatus,
@@ -64,12 +65,19 @@ export default function CommunityListPage() {
   const [submitting, setSubmitting] = useState(false);
   const [tag, setTag] = useState<string | undefined>();
   const [role, setRole] = useState<string | null>(null);
+  // T6.19 — trending strip (top 5, 24h window)
+  const [trending, setTrending] = useState<CommunityPost[]>([]);
   const [form] = Form.useForm();
 
   useEffect(() => {
     getMe()
       .then((u: any) => setRole(u?.role ?? null))
       .catch(() => setRole(null));
+    // T6.19 — fetch trending strip alongside role. Failure is
+    // silent — trending is a nice-to-have.
+    listTrendingPosts(24, 5)
+      .then((r) => setTrending(r.items))
+      .catch(() => setTrending([]));
   }, []);
 
   const reload = async (t?: string) => {
@@ -176,6 +184,35 @@ export default function CommunityListPage() {
           }
         />
       </div>
+
+      {/* T6.19 — trending strip. Only render when we actually got 1+
+          posts back from the /trending endpoint. */}
+      {trending.length > 0 && (
+        <Card
+          size="small"
+          style={{ marginBottom: 12, background: '#fff7e6', borderColor: '#ffd591' }}
+          title={
+            <span>
+              <FireOutlined style={{ color: '#fa8c16' }} /> 24 小时热门
+            </span>
+          }
+        >
+          <Space wrap size="small">
+            {trending.map((p) => (
+              <Button
+                key={p.id}
+                size="small"
+                onClick={() => router.push(`/dashboard/community/${p.id}`)}
+              >
+                {p.title}
+                <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>
+                  👍{p.like_count} 💬{p.comment_count}
+                </Text>
+              </Button>
+            ))}
+          </Space>
+        </Card>
+      )}
 
       <Card size="small">
         {loading ? (
