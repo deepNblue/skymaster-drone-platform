@@ -275,6 +275,19 @@ export async function getMyCommunityStats(): Promise<MyCommunityStats> {
   return data as MyCommunityStats;
 }
 
+// T6.23 — top community tags for the sidebar tag cloud
+export interface CommunityTagCloud {
+  tags: Record<string, number>;
+  total_distinct: number;
+}
+
+export async function listCommunityTags(limit = 30): Promise<CommunityTagCloud> {
+  const { data } = await api.get('/api/v1/community/tags', {
+    params: { limit },
+  });
+  return data as CommunityTagCloud;
+}
+
 export async function fetchModerationStats(): Promise<ModerationStats> {
   const { data } = await api.get('/api/v1/community/moderation/stats');
   return data as ModerationStats;

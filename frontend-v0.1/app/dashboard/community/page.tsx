@@ -41,8 +41,10 @@ import {
 import {
   listCommunityPosts,
   listTrendingPosts,
+  listCommunityTags,
   createCommunityPost,
   CommunityPost,
+  CommunityTagCloud,
   ModerationStatus,
 } from '@/lib/community';
 import { getMe } from '@/lib/api';
@@ -67,6 +69,8 @@ export default function CommunityListPage() {
   const [role, setRole] = useState<string | null>(null);
   // T6.19 — trending strip (top 5, 24h window)
   const [trending, setTrending] = useState<CommunityPost[]>([]);
+  // T6.23 — tag cloud sidebar
+  const [tagCloud, setTagCloud] = useState<CommunityTagCloud | null>(null);
   const [form] = Form.useForm();
 
   useEffect(() => {
@@ -78,6 +82,8 @@ export default function CommunityListPage() {
     listTrendingPosts(24, 5)
       .then((r) => setTrending(r.items))
       .catch(() => setTrending([]));
+    // T6.23 — tag cloud fetch, also best-effort
+    listCommunityTags(30).then(setTagCloud).catch(() => setTagCloud(null));
   }, []);
 
   const reload = async (t?: string) => {
@@ -189,6 +195,48 @@ export default function CommunityListPage() {
           }
         />
       </div>
+
+      {/* T6.23 — top-tag cloud sidebar. Frequency-weighted chips
+          from the /community/tags endpoint. Only renders when the
+          API call succeeded and returned at least one tag. */}
+      {tagCloud && Object.keys(tagCloud.tags).length > 0 && (
+        <Card
+          size="small"
+          title="🏷️ 热门标签"
+          style={{ marginBottom: 12 }}
+          extra={
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              共 {tagCloud.total_distinct} 个话题
+            </Text>
+          }
+        >
+          <Space size={[4, 8]} wrap>
+            {Object.entries(tagCloud.tags).map(([t, n]) => {
+              // Font-size mapping from count: min→12, max→18.
+              const counts = Object.values(tagCloud.tags);
+              const maxN = Math.max(...counts, 1);
+              const minN = Math.min(...counts, 1);
+              const span = Math.max(1, maxN - minN);
+              const size = Math.round(12 + ((n - minN) / span) * 6);
+              const active = tag === t;
+              return (
+                <Tag
+                  key={t}
+                  color={active ? 'blue' : undefined}
+                  style={{
+                    cursor: 'pointer',
+                    fontSize: size,
+                    padding: '2px 8px',
+                  }}
+                  onClick={() => setTag(active ? undefined : t)}
+                >
+                  #{t} ({n})
+                </Tag>
+              );
+            })}
+          </Space>
+        </Card>
+      )}
 
       {/* T6.19 — trending strip. Only render when we actually got 1+
           posts back from the /trending endpoint. */}

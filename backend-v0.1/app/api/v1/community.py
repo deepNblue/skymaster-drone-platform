@@ -1011,6 +1011,32 @@ async def get_my_reputation(
     }
 
 
+@router.get("/tags")
+async def list_top_community_tags(
+    limit: int = Query(30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> dict:
+    """T6.23 — top community tags for the sidebar tag cloud.
+
+    Scans approved posts only (published content), folds JSON tag
+    arrays, returns top-N by frequency. Same shape as marketplace
+    facets so the frontend can reuse the tag-dropdown pattern.
+    """
+    rows = (await db.execute(
+        select(CommunityPost.tags)
+        .where(CommunityPost.moderation_status == "approved")
+    )).all()
+    counts: dict[str, int] = {}
+    for (tags,) in rows:
+        for t in (tags or []):
+            if not isinstance(t, str):
+                continue
+            counts[t] = counts.get(t, 0) + 1
+    top = dict(sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:limit])
+    return {"tags": top, "total_distinct": len(counts)}
+
+
 @router.get("/me/stats")
 async def get_my_community_stats(
     db: AsyncSession = Depends(get_db),
