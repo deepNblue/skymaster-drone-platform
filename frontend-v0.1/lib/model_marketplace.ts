@@ -99,6 +99,9 @@ export async function listModelListings(params: {
   task?: string;
   framework?: string;
   tag?: string;
+  // T5.12 — search + sort
+  q?: string;
+  sort?: 'featured' | 'newest' | 'popular' | 'top_rated';
   limit?: number;
   offset?: number;
 } = {}): Promise<ListingPage> {

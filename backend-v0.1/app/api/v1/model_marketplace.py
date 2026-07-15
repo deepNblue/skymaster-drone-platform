@@ -106,6 +106,15 @@ async def list_listings(
     task: str | None = Query(None),
     framework: str | None = Query(None),
     tag: str | None = Query(None),
+    # T5.12 — search + sort
+    q: str | None = Query(
+        None, min_length=1, max_length=100,
+        description="Case-insensitive substring match on name/description",
+    ),
+    sort: str = Query(
+        "featured",
+        description="featured | newest | popular | top_rated",
+    ),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -136,14 +145,61 @@ async def list_listings(
         stmt = stmt.where(ModelListing.framework == framework)
     if tag:
         stmt = stmt.where(ModelListing.tags.contains([tag]))
+    # T5.12 — free-text substring search on name + description
+    if q:
+        needle = f"%{q.lower()}%"
+        stmt = stmt.where(
+            func.lower(ModelListing.name).like(needle)
+            | func.lower(ModelListing.description).like(needle)
+        )
 
     total = (await db.execute(
         select(func.count()).select_from(stmt.subquery())
     )).scalar_one()
-    stmt = stmt.order_by(
-        ModelListing.is_featured.desc(),
-        ModelListing.updated_at.desc(),
-    ).limit(limit).offset(offset)
+    # T5.12 — sort presets
+    if sort == "newest":
+        stmt = stmt.order_by(ModelListing.created_at.desc())
+    elif sort == "popular":
+        # Order by deployment_count DESC via correlated aggregate. SQLite
+        # + PG both handle this pattern; for perf on huge datasets we'd
+        # cache the count on the listing row, but that's premature here.
+        dep_expr = (
+            select(func.count(ModelDeployment.id))
+            .join(ModelVersion, ModelVersion.id == ModelDeployment.version_id)
+            .where(
+                ModelVersion.listing_id == ModelListing.id,
+                ModelDeployment.status.in_(["installed", "active"]),
+            )
+            .correlate(ModelListing)
+            .scalar_subquery()
+        )
+        stmt = stmt.order_by(dep_expr.desc(), ModelListing.updated_at.desc())
+    elif sort == "top_rated":
+        avg_expr = (
+            select(func.avg(ModelListingReview.rating))
+            .where(ModelListingReview.listing_id == ModelListing.id)
+            .correlate(ModelListing)
+            .scalar_subquery()
+        )
+        cnt_expr = (
+            select(func.count(ModelListingReview.id))
+            .where(ModelListingReview.listing_id == ModelListing.id)
+            .correlate(ModelListing)
+            .scalar_subquery()
+        )
+        # Ratings with only 1-2 reviews are noisy — order review_count>=3
+        # ahead of the long tail, then avg rating, then updated_at.
+        stmt = stmt.order_by(
+            (cnt_expr >= 3).desc(),
+            avg_expr.desc().nullslast(),
+            ModelListing.updated_at.desc(),
+        )
+    else:  # 'featured' (default)
+        stmt = stmt.order_by(
+            ModelListing.is_featured.desc(),
+            ModelListing.updated_at.desc(),
+        )
+    stmt = stmt.limit(limit).offset(offset)
     rows = (await db.execute(stmt)).scalars().all()
 
     # T5.9 — batch-fetch deployment + version counts for this page in

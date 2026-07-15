@@ -87,6 +87,9 @@ export default function ModelMarketplacePage() {
   const [task, setTask] = useState<string | undefined>();
   const [framework, setFramework] = useState<string | undefined>();
   const [tag, setTag] = useState<string | undefined>();
+  // T5.12 — search + sort
+  const [q, setQ] = useState<string>('');
+  const [sort, setSort] = useState<'featured' | 'newest' | 'popular' | 'top_rated'>('featured');
 
   const [deployments, setDeployments] = useState<ModelDeployment[]>([]);
   const [depLoading, setDepLoading] = useState(true);
@@ -107,7 +110,12 @@ export default function ModelMarketplacePage() {
         setListings(rows);
         setTotal(rows.length);
       } else {
-        const res = await listModelListings({ task, framework, tag, limit: 60 });
+        const res = await listModelListings({
+          task, framework, tag,
+          q: q.trim() || undefined,
+          sort,
+          limit: 60,
+        });
         setListings(res.items);
         setTotal(res.total);
       }
@@ -116,7 +124,7 @@ export default function ModelMarketplacePage() {
     } finally {
       setLoading(false);
     }
-  }, [task, framework, tag, favOnly]);
+  }, [task, framework, tag, favOnly, q, sort]);
 
   const reloadDeps = useCallback(async () => {
     setDepLoading(true);
@@ -228,6 +236,27 @@ export default function ModelMarketplacePage() {
         <Col span={16}>
           <Card size="small">
             <Space wrap style={{ marginBottom: 12 }}>
+              {/* T5.12 — search box */}
+              <Input.Search
+                allowClear
+                placeholder="搜索模型名 / 描述"
+                style={{ width: 220 }}
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                onSearch={(v) => setQ(v)}
+              />
+              {/* T5.12 — sort preset */}
+              <Select
+                style={{ width: 140 }}
+                value={sort}
+                onChange={setSort}
+                options={[
+                  { value: 'featured', label: '⭐ 精选优先' },
+                  { value: 'newest', label: '🕒 最新发布' },
+                  { value: 'popular', label: '🚀 部署最多' },
+                  { value: 'top_rated', label: '👍 好评优先' },
+                ]}
+              />
               <Select
                 allowClear placeholder="任务类型" style={{ width: 140 }}
                 options={TASK_OPTIONS}
