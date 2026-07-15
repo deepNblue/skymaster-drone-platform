@@ -361,6 +361,14 @@ export default function ModelMarketplacePage() {
                               </span>
                             </Tooltip>
                           )}
+                          {/* T5.11 — star rating rollup */}
+                          {typeof l.review_count === 'number' && l.review_count > 0 && (
+                            <Tooltip title={`${l.review_count} 条评价`}>
+                              <span>
+                                ⭐ {l.average_rating?.toFixed(1)}
+                              </span>
+                            </Tooltip>
+                          )}
                           {(l.tags ?? []).slice(0, 3).map((t) => (
                             <span key={t}>#{t}</span>
                           ))}

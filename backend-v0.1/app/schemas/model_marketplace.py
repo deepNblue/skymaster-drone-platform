@@ -53,6 +53,9 @@ class ListingOut(BaseModel):
     version_count: int = 0
     # T5.10 — populated by the API layer per caller.
     favorited_by_me: bool = False
+    # T5.11 — aggregate review stats
+    average_rating: float = 0.0
+    review_count: int = 0
 
 
 class ListingPage(BaseModel):
@@ -150,4 +153,30 @@ class UsageDailySeries(BaseModel):
     since_days: int
     quota_calls_per_day: int | None
     points: list[UsageDailyPoint]
+
+
+# ---------------------------------------------------------------------------
+# T5.11 — Reviews
+# ---------------------------------------------------------------------------
+class ReviewCreate(BaseModel):
+    rating: int = Field(..., ge=1, le=5)
+    comment: str | None = Field(None, max_length=2000)
+
+
+class ReviewOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    listing_id: UUID
+    user_id: UUID
+    rating: int
+    comment: str | None
+    created_at: datetime
+
+
+class ReviewAggregate(BaseModel):
+    """Rolled-up rating stats for a listing (embedded in ListingOut)."""
+    average_rating: float = 0.0  # 0.0 when count == 0
+    review_count: int = 0
+    # Histogram: 1..5 → count. Missing keys mean 0.
+    rating_histogram: dict[int, int] = Field(default_factory=dict)
 

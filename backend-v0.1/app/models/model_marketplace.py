@@ -214,3 +214,43 @@ class ModelFavorite(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# T5.11 — model listing reviews (1-5 stars, one per user per listing)
+# ---------------------------------------------------------------------------
+class ModelListingReview(Base):
+    """A user's star rating + optional text review of a ModelListing.
+
+    Mirrors ``SceneListingReview`` for the model marketplace.
+    Enforced 1..5 via API layer (Pydantic ge=1 le=5); no CHECK
+    constraint here because SQLite test setups get picky about
+    that on retroactive migrations.
+    """
+
+    __tablename__ = "model_listing_reviews"
+    __table_args__ = (
+        UniqueConstraint(
+            "listing_id", "user_id",
+            name="uq_model_listing_review_per_user",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid4,
+    )
+    listing_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("model_listings.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )

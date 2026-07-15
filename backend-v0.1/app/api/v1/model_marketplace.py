@@ -35,12 +35,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
 from app.deps import get_current_user
 from app.models.model_marketplace import (
-    ModelDeployment, ModelFavorite, ModelListing, ModelUsageEvent, ModelVersion,
+    ModelDeployment, ModelFavorite, ModelListing, ModelListingReview,
+    ModelUsageEvent, ModelVersion,
 )
 from app.models.user import User
 from app.schemas.model_marketplace import (
     DeploymentCreate, DeploymentOut,
     ListingCreate, ListingOut, ListingPage,
+    ReviewAggregate, ReviewCreate, ReviewOut,
     UsageDailyPoint, UsageDailySeries, UsageRecord, UsageSummary,
     VersionCreate, VersionOut, VersionReview,
 )
@@ -179,6 +181,8 @@ async def list_listings(
     items = []
     # T5.10 — batch-fetch favorited listing IDs for this caller in one hit
     fav_ids: set = set()
+    # T5.11 — batch-fetch review aggregates (avg rating + count) per listing
+    rating_map: dict = {}
     if listing_ids:
         fav_rows = (await db.execute(
             select(ModelFavorite.listing_id).where(
@@ -187,11 +191,26 @@ async def list_listings(
             )
         )).all()
         fav_ids = {row[0] for row in fav_rows}
+        rating_rows = (await db.execute(
+            select(
+                ModelListingReview.listing_id,
+                func.avg(ModelListingReview.rating),
+                func.count(ModelListingReview.id),
+            )
+            .where(ModelListingReview.listing_id.in_(listing_ids))
+            .group_by(ModelListingReview.listing_id)
+        )).all()
+        rating_map = {
+            lid: (float(avg or 0.0), int(cnt)) for lid, avg, cnt in rating_rows
+        }
     for r in rows:
         out = ListingOut.model_validate(r)
         out.deployment_count = dep_counts.get(r.id, 0)
         out.version_count = ver_counts.get(r.id, 0)
         out.favorited_by_me = r.id in fav_ids
+        avg, cnt = rating_map.get(r.id, (0.0, 0))
+        out.average_rating = round(avg, 2)
+        out.review_count = cnt
         items.append(out)
     return ListingPage(total=total, items=items)
 
@@ -245,6 +264,16 @@ async def get_listing(
         )
     )).scalar_one_or_none()
     out.favorited_by_me = fav is not None
+    # T5.11 — aggregate reviews
+    agg = (await db.execute(
+        select(
+            func.avg(ModelListingReview.rating),
+            func.count(ModelListingReview.id),
+        ).where(ModelListingReview.listing_id == listing.id)
+    )).one()
+    avg_val, cnt_val = agg
+    out.average_rating = round(float(avg_val or 0.0), 2)
+    out.review_count = int(cnt_val or 0)
     return out
 
 
@@ -668,3 +697,124 @@ async def usage_daily(
         quota_calls_per_day=dep.quota_calls_per_day,
         points=points,
     )
+
+
+# ---------------------------------------------------------------------------
+# T5.11 — Reviews
+# ---------------------------------------------------------------------------
+@router.post(
+    "/listings/{lid}/reviews",
+    response_model=ReviewOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_review(
+    lid: UUID,
+    payload: ReviewCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ReviewOut:
+    """Create or *upsert* a review. UNIQUE(listing_id, user_id) means a
+    second call from the same user updates the existing row rather than
+    creating a duplicate — this matches how star-review UX generally
+    behaves (edit-my-review, don't spawn N).
+    """
+    listing = (await db.execute(
+        select(ModelListing).where(ModelListing.id == lid)
+    )).scalar_one_or_none()
+    if not listing:
+        raise HTTPException(status_code=404, detail="listing not found")
+    existing = (await db.execute(
+        select(ModelListingReview).where(
+            ModelListingReview.listing_id == lid,
+            ModelListingReview.user_id == user.id,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        existing.rating = payload.rating
+        existing.comment = payload.comment
+        await db.commit()
+        await db.refresh(existing)
+        return ReviewOut.model_validate(existing)
+    row = ModelListingReview(
+        listing_id=lid,
+        user_id=user.id,
+        rating=payload.rating,
+        comment=payload.comment,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return ReviewOut.model_validate(row)
+
+
+@router.get("/listings/{lid}/reviews", response_model=list[ReviewOut])
+async def list_reviews(
+    lid: UUID,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[ReviewOut]:
+    rows = (await db.execute(
+        select(ModelListingReview)
+        .where(ModelListingReview.listing_id == lid)
+        .order_by(ModelListingReview.created_at.desc())
+        .limit(limit).offset(offset)
+    )).scalars().all()
+    return [ReviewOut.model_validate(r) for r in rows]
+
+
+@router.get(
+    "/listings/{lid}/reviews/aggregate",
+    response_model=ReviewAggregate,
+)
+async def get_review_aggregate(
+    lid: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ReviewAggregate:
+    """Rating histogram + average for a listing.
+
+    Cheap (single GROUP BY rating COUNT query) and used by the detail
+    page's review-summary card.
+    """
+    rows = (await db.execute(
+        select(
+            ModelListingReview.rating,
+            func.count(ModelListingReview.id),
+        ).where(ModelListingReview.listing_id == lid)
+        .group_by(ModelListingReview.rating)
+    )).all()
+    histogram: dict[int, int] = {r: 0 for r in range(1, 6)}
+    total_score = 0
+    total_count = 0
+    for rating, cnt in rows:
+        histogram[int(rating)] = int(cnt)
+        total_score += int(rating) * int(cnt)
+        total_count += int(cnt)
+    return ReviewAggregate(
+        average_rating=round(total_score / total_count, 2) if total_count else 0.0,
+        review_count=total_count,
+        rating_histogram=histogram,
+    )
+
+
+@router.delete(
+    "/listings/{lid}/reviews/mine",
+    status_code=status.HTTP_200_OK,
+)
+async def delete_my_review(
+    lid: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Idempotent — missing row still returns 200."""
+    from sqlalchemy import delete as sa_delete
+    await db.execute(
+        sa_delete(ModelListingReview).where(
+            ModelListingReview.listing_id == lid,
+            ModelListingReview.user_id == user.id,
+        )
+    )
+    await db.commit()
+    return {"deleted": True}

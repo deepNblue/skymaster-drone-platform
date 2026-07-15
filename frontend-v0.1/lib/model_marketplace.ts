@@ -30,6 +30,9 @@ export interface ModelListing {
   version_count?: number;
   // T5.10 — favorite state
   favorited_by_me?: boolean;
+  // T5.11 — review rollup
+  average_rating?: number;
+  review_count?: number;
 }
 
 export interface ModelVersion {
@@ -185,4 +188,53 @@ export async function unfavoriteListing(lid: string): Promise<void> {
 export async function listMyFavorites(): Promise<ModelListing[]> {
   const { data } = await api.get(`${BASE}/favorites`);
   return data as ModelListing[];
+}
+
+// ---------------------------------------------------------------------------
+// T5.11 — Reviews
+// ---------------------------------------------------------------------------
+export interface Review {
+  id: string;
+  listing_id: string;
+  user_id: string;
+  rating: number;
+  comment: string | null;
+  created_at: string;
+}
+
+export interface ReviewAggregate {
+  average_rating: number;
+  review_count: number;
+  rating_histogram: Record<string, number>;
+}
+
+export async function submitReview(
+  lid: string, rating: number, comment?: string,
+): Promise<Review> {
+  const { data } = await api.post(
+    `${BASE}/listings/${lid}/reviews`, { rating, comment },
+  );
+  return data as Review;
+}
+
+export async function listReviews(
+  lid: string, limit = 50,
+): Promise<Review[]> {
+  const { data } = await api.get(
+    `${BASE}/listings/${lid}/reviews`, { params: { limit } },
+  );
+  return data as Review[];
+}
+
+export async function getReviewAggregate(
+  lid: string,
+): Promise<ReviewAggregate> {
+  const { data } = await api.get(
+    `${BASE}/listings/${lid}/reviews/aggregate`,
+  );
+  return data as ReviewAggregate;
+}
+
+export async function deleteMyReview(lid: string): Promise<void> {
+  await api.delete(`${BASE}/listings/${lid}/reviews/mine`);
 }
