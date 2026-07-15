@@ -730,6 +730,20 @@ export async function getApprovalsSummary(): Promise<ApprovalsSummary> {
   return data as ApprovalsSummary;
 }
 
+// T8.2 — SLA metrics for the approvals dashboard
+export interface ApprovalsSLA {
+  decided_last_30d: number;
+  avg_decision_hours: number;
+  p95_decision_hours: number;
+  pending_over_24h: number;
+  pending_over_72h: number;
+}
+
+export async function getApprovalsSLA(): Promise<ApprovalsSLA> {
+  const { data } = await api.get('/api/v1/approvals/summary/sla');
+  return data as ApprovalsSLA;
+}
+
 export async function getApproval(id: string) {
   const { data } = await api.get(`/api/v1/approvals/${id}`);
   return data as FlightApproval;

@@ -15,8 +15,8 @@ import {
 import dayjs, { type Dayjs } from 'dayjs';
 import {
   listApprovals, getApproval, createApproval, submitApproval,
-  getApprovalsSummary,
-  type ApprovalsSummary,
+  getApprovalsSummary, getApprovalsSLA,
+  type ApprovalsSummary, type ApprovalsSLA,
   previewRouting, decideAuthority, cancelApproval, markApprovalFlown,
   preflightCheck, type FlightApproval, type PreflightResult,
   batchSubmitApprovals, batchSecondApproveApprovals, secondApproveApproval,
@@ -85,13 +85,16 @@ export default function ApprovalsPage() {
   const [exportRange, setExportRange] = useState<[Dayjs, Dayjs] | null>(null);
   // T8.1 — dashboard summary counters shown above the table.
   const [summary, setSummary] = useState<ApprovalsSummary | null>(null);
+  // T8.2 — SLA metrics (avg/p95 decision time + over-SLA counts)
+  const [sla, setSla] = useState<ApprovalsSLA | null>(null);
 
   const load = async () => {
     setLoading(true);
     try {
       setRows(await listApprovals());
-      // T8.1 — summary is best-effort; failure is silent
+      // T8.1/T8.2 — both are best-effort; failure is silent
       getApprovalsSummary().then(setSummary).catch(() => {});
+      getApprovalsSLA().then(setSla).catch(() => {});
     } catch (e: any) {
       message.error('加载失败');
     } finally {
@@ -467,6 +470,41 @@ export default function ApprovalsPage() {
                 title="已驳回"
                 value={summary.status_counts?.rejected ?? 0}
                 valueStyle={{ color: '#ff4d4f' }}
+              />
+            </Space>
+          </Card>
+        )}
+
+        {/* T8.2 — SLA panel: avg / p95 decision time + over-SLA
+            alerting counters. Only rendered when payload arrives. */}
+        {sla && (
+          <Card size="small" style={{ marginBottom: 12 }}>
+            <Space size="large" wrap>
+              <Statistic
+                title="平均审批耗时 (30d)"
+                value={sla.avg_decision_hours}
+                precision={1}
+                suffix="h"
+              />
+              <Statistic
+                title="P95 审批耗时"
+                value={sla.p95_decision_hours}
+                precision={1}
+                suffix="h"
+              />
+              <Statistic
+                title="超 24h 未决"
+                value={sla.pending_over_24h}
+                valueStyle={{
+                  color: sla.pending_over_24h > 0 ? '#faad14' : undefined,
+                }}
+              />
+              <Statistic
+                title="超 72h 未决"
+                value={sla.pending_over_72h}
+                valueStyle={{
+                  color: sla.pending_over_72h > 0 ? '#ff4d4f' : undefined,
+                }}
               />
             </Space>
           </Card>

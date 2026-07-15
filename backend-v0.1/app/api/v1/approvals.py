@@ -363,6 +363,89 @@ async def approvals_summary(
 # ---------------------------------------------------------------------------
 # T7.8 — Batch export approvals (CSV + certificate ZIP)
 # ---------------------------------------------------------------------------
+@router.get("/summary/sla")
+async def approvals_sla(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """T8.2 — SLA counters for the caller's tenant.
+
+    Cheap dashboard-side companion to /summary. Returns:
+      - avg_decision_hours: mean(decided_at - created_at) over decided
+        rows in the last 30d
+      - p95_decision_hours: rough 95th-percentile (nlargest sort in
+        Python; suite is smaller than 10k so this is fine)
+      - pending_over_24h / pending_over_72h: currently open approvals
+        whose age exceeds the SLA threshold
+    """
+    from datetime import datetime, timezone as _tz, timedelta
+
+    tenant = user.org_id
+    now = datetime.now(_tz.utc)
+    cutoff = now - timedelta(days=30)
+
+    # Decided rows in last 30d — approved OR rejected. We derive the
+    # decision timestamp from ``updated_at`` on rows in a terminal
+    # status (there's no dedicated decided_at column).
+    from app.models.flight_approval import FlightApproval as FA
+    decided = (await db.execute(
+        select(FA.created_at, FA.updated_at)
+        .where(
+            FA.tenant_id == tenant,
+            FA.status.in_(["approved", "rejected"]),
+            FA.created_at >= cutoff,
+        )
+    )).all()
+    def _aware(dt):
+        # SQLite drops tzinfo on read — normalise for cross-DB parity.
+        return dt.replace(tzinfo=_tz.utc) if dt and dt.tzinfo is None else dt
+
+    deltas_hours = []
+    for created, decided_at in decided:
+        created = _aware(created)
+        decided_at = _aware(decided_at)
+        if created and decided_at:
+            deltas_hours.append(
+                (decided_at - created).total_seconds() / 3600
+            )
+    avg_h = round(sum(deltas_hours) / len(deltas_hours), 2) if deltas_hours else 0.0
+    if deltas_hours:
+        sorted_h = sorted(deltas_hours)
+        # p95 index — floor for stability on very small N
+        idx = min(len(sorted_h) - 1, int(len(sorted_h) * 0.95))
+        p95_h = round(sorted_h[idx], 2)
+    else:
+        p95_h = 0.0
+
+    # Open approvals aged over 24h/72h
+    open_ = (await db.execute(
+        select(FA.created_at)
+        .where(
+            FA.tenant_id == tenant,
+            FA.status.in_(["submitted", "under_review"]),
+        )
+    )).all()
+    over_24h = 0
+    over_72h = 0
+    for (created,) in open_:
+        if not created:
+            continue
+        created = _aware(created)
+        age_h = (now - created).total_seconds() / 3600
+        if age_h > 72:
+            over_72h += 1
+        if age_h > 24:
+            over_24h += 1
+
+    return {
+        "decided_last_30d": len(deltas_hours),
+        "avg_decision_hours": avg_h,
+        "p95_decision_hours": p95_h,
+        "pending_over_24h": over_24h,
+        "pending_over_72h": over_72h,
+    }
+
+
 @router.get("/export.csv")
 async def export_approvals_csv(
     status: Optional[str] = Query(None),
