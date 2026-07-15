@@ -1405,6 +1405,19 @@ export async function browseSceneListings(params: {
   return data;
 }
 
+// T7.11 — scene marketplace filter facets
+export interface SceneMarketplaceFacets {
+  categories: Record<string, number>;
+  licenses: Record<string, number>;
+  tags: Record<string, number>;
+  total: number;
+}
+
+export async function getSceneMarketplaceFacets(): Promise<SceneMarketplaceFacets> {
+  const { data } = await api.get('/api/v1/marketplace/scenes/facets');
+  return data as SceneMarketplaceFacets;
+}
+
 export async function cloneSceneListing(listingId: string): Promise<{
   scene_id: string;
   listing_id: string;
