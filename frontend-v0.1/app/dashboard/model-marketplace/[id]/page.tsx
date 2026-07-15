@@ -17,7 +17,8 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import {
   createModelVersion, getModelListing, installModelVersion,
-  listModelVersions, ModelListing, ModelVersion, reviewModelVersion,
+  listModelVersions, listSimilarListings,
+  ModelListing, ModelVersion, reviewModelVersion,
 } from '@/lib/model_marketplace';
 import { getMe } from '@/lib/api';
 
@@ -37,6 +38,8 @@ export default function ModelListingDetailPage() {
 
   const [listing, setListing] = useState<ModelListing | null>(null);
   const [versions, setVersions] = useState<ModelVersion[]>([]);
+  // T5.14 — 'people also viewed' recommendations
+  const [similar, setSimilar] = useState<ModelListing[]>([]);
   const [loading, setLoading] = useState(true);
   const [me, setMe] = useState<any | null>(null);
 
@@ -58,6 +61,8 @@ export default function ModelListingDetailPage() {
       setListing(l);
       setVersions(vs);
       setMe(u);
+      // T5.14 — best-effort; a slow /similar shouldn't block the page
+      listSimilarListings(lid, 6).then(setSimilar).catch(() => setSimilar([]));
     } catch (e: any) {
       message.error(`加载失败: ${e?.response?.data?.detail ?? e.message}`);
     } finally {
@@ -274,6 +279,55 @@ export default function ModelListingDetailPage() {
           />
         )}
       </Card>
+
+      {/* T5.14 — 'people also viewed' section */}
+      {similar.length > 0 && (
+        <Card
+          size="small"
+          title="🔗 相似模型"
+          style={{ marginTop: 16 }}
+          extra={
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              基于任务、框架和标签相似度推荐
+            </Text>
+          }
+        >
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+            gap: 12,
+          }}>
+            {similar.map((s) => (
+              <Card
+                key={s.id}
+                size="small"
+                hoverable
+                onClick={() => window.location.assign(
+                  `/dashboard/model-marketplace/${s.id}`,
+                )}
+                style={{ cursor: 'pointer' }}
+              >
+                <div style={{ fontWeight: 500, marginBottom: 4 }}>
+                  {s.name}
+                </div>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>
+                  {s.task} · {s.framework}
+                </div>
+                <Space size="small">
+                  {typeof s.deployment_count === 'number' && s.deployment_count > 0 && (
+                    <span style={{ fontSize: 12 }}>🚀 {s.deployment_count}</span>
+                  )}
+                  {typeof s.review_count === 'number' && s.review_count > 0 && (
+                    <span style={{ fontSize: 12 }}>
+                      ⭐ {s.average_rating?.toFixed(1)}
+                    </span>
+                  )}
+                </Space>
+              </Card>
+            ))}
+          </div>
+        </Card>
+      )}
 
       <Modal
         open={pushOpen}

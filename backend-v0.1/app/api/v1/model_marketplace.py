@@ -917,6 +917,102 @@ async def get_review_aggregate(
     )
 
 
+@router.get(
+    "/listings/{lid}/similar",
+    response_model=list[ListingOut],
+)
+async def list_similar_listings(
+    lid: UUID,
+    limit: int = Query(6, ge=1, le=20),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[ListingOut]:
+    """T5.14 — "people also viewed" style recommendations.
+
+    Naive but effective content-based similarity: rank other public
+    listings by score =
+        +3 if same task
+        +2 if same framework
+        +1 per shared tag
+    Excludes the target listing itself. Cheap for O(N) catalog sizes
+    we care about (<10k). For 100k+ we'd move to a vector-embedding
+    index (ANN over description text) or the like.
+    """
+    seed = (await db.execute(
+        select(ModelListing).where(ModelListing.id == lid)
+    )).scalar_one_or_none()
+    if not seed:
+        raise HTTPException(status_code=404, detail="listing not found")
+
+    candidates = (await db.execute(
+        select(ModelListing).where(
+            ModelListing.id != seed.id,
+            ModelListing.visibility == "public",
+        )
+    )).scalars().all()
+
+    seed_tags = set(seed.tags or [])
+    scored: list[tuple[int, ModelListing]] = []
+    for c in candidates:
+        score = 0
+        if c.task and c.task == seed.task:
+            score += 3
+        if c.framework and c.framework == seed.framework:
+            score += 2
+        shared = seed_tags & set(c.tags or [])
+        score += len(shared)
+        if score > 0:
+            scored.append((score, c))
+
+    scored.sort(
+        key=lambda t: (t[0], t[1].updated_at or t[1].created_at),
+        reverse=True,
+    )
+    top = [row for _, row in scored[:limit]]
+
+    if not top:
+        return []
+
+    # Backfill deployment_count + review stats in one round each so
+    # cards on the detail page look identical to the grid cards.
+    listing_ids = [r.id for r in top]
+    dep_rows = (await db.execute(
+        select(
+            ModelVersion.listing_id, func.count(ModelDeployment.id),
+        )
+        .join(ModelDeployment, ModelDeployment.version_id == ModelVersion.id)
+        .where(
+            ModelVersion.listing_id.in_(listing_ids),
+            ModelDeployment.status.in_(["installed", "active"]),
+        )
+        .group_by(ModelVersion.listing_id)
+    )).all()
+    dep_counts = {lid_: int(c) for lid_, c in dep_rows}
+
+    rating_rows = (await db.execute(
+        select(
+            ModelListingReview.listing_id,
+            func.avg(ModelListingReview.rating),
+            func.count(ModelListingReview.id),
+        )
+        .where(ModelListingReview.listing_id.in_(listing_ids))
+        .group_by(ModelListingReview.listing_id)
+    )).all()
+    rating_map = {
+        lid_: (float(avg or 0.0), int(cnt)) for lid_, avg, cnt in rating_rows
+    }
+
+    out_items: list[ListingOut] = []
+    for r in top:
+        o = ListingOut.model_validate(r)
+        o.deployment_count = dep_counts.get(r.id, 0)
+        avg, cnt = rating_map.get(r.id, (0.0, 0))
+        o.average_rating = round(avg, 2)
+        o.review_count = cnt
+        out_items.append(o)
+    return out_items
+
+
 @router.delete(
     "/listings/{lid}/reviews/mine",
     status_code=status.HTTP_200_OK,

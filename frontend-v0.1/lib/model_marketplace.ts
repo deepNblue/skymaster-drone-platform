@@ -208,6 +208,17 @@ export async function getMarketplaceFacets(): Promise<MarketplaceFacets> {
   return data as MarketplaceFacets;
 }
 
+// T5.14 — 'people also viewed' similar listings
+export async function listSimilarListings(
+  lid: string, limit = 6,
+): Promise<ModelListing[]> {
+  const { data } = await api.get(
+    `${BASE}/listings/${lid}/similar`,
+    { params: { limit } },
+  );
+  return data as ModelListing[];
+}
+
 // ---------------------------------------------------------------------------
 // T5.11 — Reviews
 // ---------------------------------------------------------------------------
