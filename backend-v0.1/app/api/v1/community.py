@@ -973,6 +973,44 @@ async def get_reporter_reputation(
     }
 
 
+@router.get("/me/reputation")
+async def get_my_reputation(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """T6.21 — self-view of the caller's reporter reputation.
+
+    Same shape as the admin surface (T6.12) but for the current user.
+    Used on the profile page so a user can see whether their reports
+    still count (they don't if they've been silently muted).
+    """
+    row = (
+        await db.execute(
+            select(
+                func.count().filter(CommunityReport.status == "resolved"),
+                func.count().filter(CommunityReport.status == "dismissed"),
+                func.count().filter(CommunityReport.status == "open"),
+            ).where(CommunityReport.reporter_id == user.id)
+        )
+    ).one()
+    resolved, dismissed, open_count = row
+    weight = await _reporter_weight(db, user.id)
+    if weight >= 1.4:
+        label = "trusted"
+    elif weight <= 0.6:
+        label = "suspect"
+    else:
+        label = "neutral"
+    return {
+        "reporter_id": str(user.id),
+        "resolved": int(resolved),
+        "dismissed": int(dismissed),
+        "open": int(open_count),
+        "weight": round(weight, 3),
+        "label": label,
+    }
+
+
 
 @router.post(
     "/moderation/reports/{rid}/resolve",

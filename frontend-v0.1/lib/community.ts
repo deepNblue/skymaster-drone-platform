@@ -243,6 +243,21 @@ export async function listTrendingPosts(
   return data as PostList;
 }
 
+// T6.21 — self-view reputation
+export interface MyReputation {
+  reporter_id: string;
+  resolved: number;
+  dismissed: number;
+  open: number;
+  weight: number;
+  label: 'trusted' | 'neutral' | 'suspect';
+}
+
+export async function getMyReputation(): Promise<MyReputation> {
+  const { data } = await api.get('/api/v1/community/me/reputation');
+  return data as MyReputation;
+}
+
 export async function fetchModerationStats(): Promise<ModerationStats> {
   const { data } = await api.get('/api/v1/community/moderation/stats');
   return data as ModerationStats;

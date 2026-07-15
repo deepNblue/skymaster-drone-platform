@@ -15,7 +15,9 @@ import {
 import { FireOutlined } from '@ant-design/icons';
 import {
   listMyPosts,
+  getMyReputation,
   type CommunityPost,
+  type MyReputation,
 } from '@/lib/community';
 
 const { Title, Text } = Typography;
@@ -31,6 +33,12 @@ export default function MyPostsPage() {
   const [posts, setPosts] = useState<CommunityPost[]>([]);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState<'all' | 'approved' | 'pending' | 'rejected'>('all');
+  // T6.21 — my reputation is loaded once on mount, silent on failure
+  const [rep, setRep] = useState<MyReputation | null>(null);
+
+  useEffect(() => {
+    getMyReputation().then(setRep).catch(() => setRep(null));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,6 +102,37 @@ export default function MyPostsPage() {
       </div>
 
       <Card size="small">
+        {/* T6.21 — reporter reputation banner. Colour-coded by label so
+            trusted reporters get positive reinforcement and suspects
+            see why their reports are being weighted down. */}
+        {rep && (
+          <div style={{
+            marginBottom: 12,
+            padding: '8px 12px',
+            background: rep.label === 'trusted'
+              ? '#f6ffed'
+              : rep.label === 'suspect' ? '#fff2f0' : '#f0f5ff',
+            border: `1px solid ${
+              rep.label === 'trusted' ? '#b7eb8f'
+                : rep.label === 'suspect' ? '#ffccc7' : '#adc6ff'
+            }`,
+            borderRadius: 4,
+            fontSize: 13,
+          }}>
+            <Space size="middle">
+              <Tag color={
+                rep.label === 'trusted' ? 'green'
+                  : rep.label === 'suspect' ? 'red' : 'blue'
+              }>
+                {rep.label === 'trusted' ? '⭐ 可信举报者'
+                  : rep.label === 'suspect' ? '⚠️ 举报受限' : '举报权重正常'}
+              </Tag>
+              <Text type="secondary">
+                历史举报：{rep.resolved} 采纳 / {rep.dismissed} 驳回 · 当前权重 {rep.weight}
+              </Text>
+            </Space>
+          </div>
+        )}
         <Table
           rowKey="id"
           loading={loading}
