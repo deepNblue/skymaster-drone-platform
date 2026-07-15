@@ -213,6 +213,60 @@ export default function CommunityModerationPage() {
               阈值 {stats.auto_hide_threshold} 条举报
             </Text>
           </Card>
+          {/* T6.18 — pending appeal queue */}
+          {typeof stats.pending_appeals === 'number' && (
+            <Card
+              size="small"
+              style={{ minWidth: 160, cursor: 'pointer' }}
+              onClick={() =>
+                router.push('/dashboard/community/moderation/appeals')
+              }
+            >
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  待处理申诉
+                </Text>
+              </div>
+              <div
+                style={{
+                  fontSize: 22,
+                  fontWeight: 600,
+                  color: stats.pending_appeals > 0 ? '#722ed1' : undefined,
+                }}
+              >
+                {stats.pending_appeals}
+              </div>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                点击进入队列 →
+              </Text>
+            </Card>
+          )}
+          {/* T6.18 — 7-day trending reasons */}
+          {(stats.top_reasons_7d?.length ?? 0) > 0 && (
+            <Card size="small" style={{ minWidth: 260 }}>
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  近 7 天热门举报理由
+                </Text>
+              </div>
+              <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {stats.top_reasons_7d!.slice(0, 5).map((x) => (
+                  <span
+                    key={x.reason}
+                    style={{
+                      fontSize: 12,
+                      background: '#fafafa',
+                      padding: '2px 8px',
+                      borderRadius: 4,
+                      border: '1px solid #d9d9d9',
+                    }}
+                  >
+                    {x.reason} <b>{x.count}</b>
+                  </span>
+                ))}
+              </div>
+            </Card>
+          )}
         </div>
       )}
 

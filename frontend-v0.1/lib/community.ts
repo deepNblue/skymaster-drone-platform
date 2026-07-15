@@ -217,6 +217,9 @@ export interface ModerationStats {
   pending_posts: number;
   auto_hidden_posts: number;
   auto_hide_threshold: number;
+  // T6.18 — new fields
+  pending_appeals?: number;
+  top_reasons_7d?: { reason: string; count: number }[];
 }
 
 export async function fetchModerationStats(): Promise<ModerationStats> {

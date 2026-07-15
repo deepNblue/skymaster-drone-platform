@@ -358,12 +358,41 @@ async def moderation_stats(
             )
         )
     ).scalar_one()
+    # T6.18 — pending appeal queue depth. Cheap COUNT, safe to expose
+    # to the same polling widget that shows open_reports.
+    pending_appeals = (
+        await db.execute(
+            select(func.count()).select_from(CommunityAppeal).where(
+                CommunityAppeal.status == "pending"
+            )
+        )
+    ).scalar_one()
+    # T6.18 — top report reasons over the last 7 days. Powers the
+    # 'trending abuse pattern' widget on the moderator dashboard so
+    # ops can see e.g. a spam wave in real time.
+    from datetime import datetime, timedelta, timezone as _tz
+    cutoff = datetime.now(_tz.utc) - timedelta(days=7)
+    reason_rows = (
+        await db.execute(
+            select(
+                CommunityReport.reason, func.count(CommunityReport.id),
+            )
+            .where(CommunityReport.created_at >= cutoff)
+            .group_by(CommunityReport.reason)
+            .order_by(func.count(CommunityReport.id).desc())
+            .limit(10)
+        )
+    ).all()
     threshold = int(os.getenv("COMMUNITY_AUTO_HIDE_THRESHOLD", "3"))
     return {
         "open_reports": open_reports,
         "pending_posts": pending_posts,
         "auto_hidden_posts": auto_hidden,
+        "pending_appeals": pending_appeals,
         "auto_hide_threshold": threshold,
+        "top_reasons_7d": [
+            {"reason": r, "count": n} for r, n in reason_rows
+        ],
     }
 
 
