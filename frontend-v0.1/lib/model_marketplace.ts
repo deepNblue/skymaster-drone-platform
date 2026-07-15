@@ -194,6 +194,21 @@ export async function listMyFavorites(): Promise<ModelListing[]> {
 }
 
 // ---------------------------------------------------------------------------
+// T5.13 — filter facets
+// ---------------------------------------------------------------------------
+export interface MarketplaceFacets {
+  tasks: Record<string, number>;
+  frameworks: Record<string, number>;
+  tags: Record<string, number>;
+  total: number;
+}
+
+export async function getMarketplaceFacets(): Promise<MarketplaceFacets> {
+  const { data } = await api.get(`${BASE}/facets`);
+  return data as MarketplaceFacets;
+}
+
+// ---------------------------------------------------------------------------
 // T5.11 — Reviews
 // ---------------------------------------------------------------------------
 export interface Review {

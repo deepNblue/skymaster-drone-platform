@@ -384,6 +384,68 @@ async def unfavorite_listing(
     return {"favorited": False}
 
 
+@router.get("/facets")
+async def get_marketplace_facets(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """T5.13 — facet counts for the filter sidebar.
+
+    Returns per-task, per-framework, and per-tag counts over the
+    currently-visible catalog (public visibility). Callers use it to
+    populate '(N)' badges next to each filter option and to hide
+    filters with 0 rows.
+
+    Three lightweight aggregate queries. If tags growth becomes a
+    problem we'll denormalize to a listing_tags junction table.
+    """
+    # Task counts
+    task_rows = (await db.execute(
+        select(ModelListing.task, func.count(ModelListing.id))
+        .where(ModelListing.visibility == "public")
+        .group_by(ModelListing.task)
+    )).all()
+    tasks = {t: int(c) for t, c in task_rows if t}
+
+    # Framework counts
+    fw_rows = (await db.execute(
+        select(ModelListing.framework, func.count(ModelListing.id))
+        .where(ModelListing.visibility == "public")
+        .group_by(ModelListing.framework)
+    )).all()
+    frameworks = {f: int(c) for f, c in fw_rows if f}
+
+    # Tag counts — expand JSON array to a flat Python counter. Fine at
+    # <10k listings; if this becomes a hotspot we switch to a
+    # listing_tag junction table + GROUP BY tag_id.
+    all_rows = (await db.execute(
+        select(ModelListing.tags)
+        .where(ModelListing.visibility == "public")
+    )).all()
+    tag_counts: dict[str, int] = {}
+    for (tag_list,) in all_rows:
+        for tg in (tag_list or []):
+            if not isinstance(tg, str):
+                continue
+            tag_counts[tg] = tag_counts.get(tg, 0) + 1
+    # Top 30 tags — keeps the UI's sidebar bounded
+    top_tags = dict(
+        sorted(tag_counts.items(), key=lambda kv: kv[1], reverse=True)[:30]
+    )
+
+    return {
+        "tasks": tasks,
+        "frameworks": frameworks,
+        "tags": top_tags,
+        "total": (
+            await db.execute(
+                select(func.count(ModelListing.id))
+                .where(ModelListing.visibility == "public")
+            )
+        ).scalar_one(),
+    }
+
+
 @router.get("/favorites", response_model=list[ListingOut])
 async def list_my_favorites(
     db: AsyncSession = Depends(get_db),

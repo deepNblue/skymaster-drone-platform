@@ -43,9 +43,11 @@ import type { ColumnsType } from 'antd/es/table';
 import {
   createModelListing,
   favoriteListing,
+  getMarketplaceFacets,
   listModelListings,
   listMyDeployments,
   listMyFavorites,
+  type MarketplaceFacets,
   ModelDeployment,
   ModelListing,
   PriceModel,
@@ -90,6 +92,13 @@ export default function ModelMarketplacePage() {
   // T5.12 — search + sort
   const [q, setQ] = useState<string>('');
   const [sort, setSort] = useState<'featured' | 'newest' | 'popular' | 'top_rated'>('featured');
+  // T5.13 — facet counts for filter badges
+  const [facets, setFacets] = useState<MarketplaceFacets | null>(null);
+
+  // T5.13 — load facets once alongside first listing fetch
+  useEffect(() => {
+    getMarketplaceFacets().then(setFacets).catch(() => setFacets(null));
+  }, []);
 
   const [deployments, setDeployments] = useState<ModelDeployment[]>([]);
   const [depLoading, setDepLoading] = useState(true);
@@ -258,17 +267,51 @@ export default function ModelMarketplacePage() {
                 ]}
               />
               <Select
-                allowClear placeholder="任务类型" style={{ width: 140 }}
-                options={TASK_OPTIONS}
+                allowClear placeholder="任务类型" style={{ width: 160 }}
+                options={
+                  facets
+                    ? TASK_OPTIONS.map((o) => ({
+                        ...o,
+                        label: `${o.label}${
+                          facets.tasks[o.value] ? ` (${facets.tasks[o.value]})` : ''
+                        }`,
+                      }))
+                    : TASK_OPTIONS
+                }
                 value={task} onChange={setTask}
               />
               <Select
-                allowClear placeholder="框架" style={{ width: 140 }}
-                options={FRAMEWORK_OPTIONS}
+                allowClear placeholder="框架" style={{ width: 160 }}
+                options={
+                  facets
+                    ? FRAMEWORK_OPTIONS.map((o) => ({
+                        ...o,
+                        label: `${o.label}${
+                          facets.frameworks[o.value]
+                            ? ` (${facets.frameworks[o.value]})` : ''
+                        }`,
+                      }))
+                    : FRAMEWORK_OPTIONS
+                }
                 value={framework} onChange={setFramework}
               />
+              {/* T5.13 — quick-pick top-tag chips */}
+              {facets && Object.keys(facets.tags).length > 0 && (
+                <Select
+                  allowClear showSearch placeholder="热门标签"
+                  style={{ width: 180 }}
+                  value={tag}
+                  onChange={(v) => setTag(v || undefined)}
+                  options={Object.entries(facets.tags)
+                    .slice(0, 20)
+                    .map(([t, n]) => ({
+                      value: t,
+                      label: `${t} (${n})`,
+                    }))}
+                />
+              )}
               <Input.Search
-                placeholder="标签过滤，如: drone"
+                placeholder="其他标签，如: drone"
                 style={{ width: 180 }}
                 allowClear
                 onSearch={(v) => setTag(v || undefined)}
