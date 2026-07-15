@@ -155,6 +155,11 @@ export default function CommunityListPage() {
             </Button>
           )}
           <Button
+            onClick={() => router.push('/dashboard/community/mine')}
+          >
+            我的发帖
+          </Button>
+          <Button
             type="primary"
             icon={<PlusOutlined />}
             onClick={() => setDrawerOpen(true)}

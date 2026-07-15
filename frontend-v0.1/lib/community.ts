@@ -222,6 +222,17 @@ export interface ModerationStats {
   top_reasons_7d?: { reason: string; count: number }[];
 }
 
+export async function listMyPosts(
+  params: {
+    limit?: number;
+    offset?: number;
+    status_filter?: 'approved' | 'pending' | 'rejected';
+  } = {},
+): Promise<PostList> {
+  const { data } = await api.get('/api/v1/community/posts/mine', { params });
+  return data as PostList;
+}
+
 export async function listTrendingPosts(
   windowHours = 24,
   limit = 20,

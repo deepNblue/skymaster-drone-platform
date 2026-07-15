@@ -166,6 +166,58 @@ async def list_posts(
     return PostList(total=total, items=items)
 
 
+@router.get("/posts/mine", response_model=PostList)
+async def list_my_posts(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status_filter: str | None = Query(
+        None, description="approved | pending | rejected"
+    ),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> PostList:
+    """T6.20 — 'my posts' surface.
+
+    Unlike the public list, this returns *every* post authored by
+    the caller regardless of moderation status, so authors can see
+    their pending / auto-hidden / rejected drafts. Includes
+    ``liked_by_me`` for consistency with the other list endpoints.
+    """
+    stmt = select(CommunityPost).where(CommunityPost.author_id == user.id)
+    if status_filter:
+        if status_filter not in {"approved", "pending", "rejected"}:
+            raise HTTPException(
+                status_code=400, detail="invalid status_filter"
+            )
+        stmt = stmt.where(CommunityPost.moderation_status == status_filter)
+    stmt_total = select(func.count()).select_from(stmt.subquery())
+    total = (await db.execute(stmt_total)).scalar_one()
+    stmt = stmt.order_by(
+        CommunityPost.created_at.desc(),
+    ).limit(limit).offset(offset)
+    rows = (await db.execute(stmt)).scalars().all()
+
+    liked_ids: set[UUID] = set()
+    if rows:
+        from app.models.community import CommunityLike
+        liked_rows = (
+            await db.execute(
+                select(CommunityLike.post_id).where(
+                    CommunityLike.user_id == user.id,
+                    CommunityLike.post_id.in_([p.id for p in rows]),
+                )
+            )
+        ).scalars().all()
+        liked_ids = set(liked_rows)
+
+    items = []
+    for p in rows:
+        out = PostOut.model_validate(p)
+        out.liked_by_me = p.id in liked_ids
+        items.append(out)
+    return PostList(total=total, items=items)
+
+
 @router.get("/posts/trending", response_model=PostList)
 async def list_trending_posts(
     window_hours: int = Query(24, ge=1, le=168),
