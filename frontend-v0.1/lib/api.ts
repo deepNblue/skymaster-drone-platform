@@ -717,6 +717,19 @@ export async function listApprovals(status?: string) {
   return data as FlightApproval[];
 }
 
+// T8.1 — dashboard summary counters for tenant
+export interface ApprovalsSummary {
+  status_counts: Record<string, number>;
+  submitted_last_7d: number;
+  in_flight: number;
+  total: number;
+}
+
+export async function getApprovalsSummary(): Promise<ApprovalsSummary> {
+  const { data } = await api.get('/api/v1/approvals/summary');
+  return data as ApprovalsSummary;
+}
+
 export async function getApproval(id: string) {
   const { data } = await api.get(`/api/v1/approvals/${id}`);
   return data as FlightApproval;

@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Card, Table, Button, Tag, Space, Typography, Modal, Form, Input,
   InputNumber, DatePicker, Select, message, Alert, Descriptions, Timeline,
-  Popconfirm, Divider, List,
+  Popconfirm, Divider, List, Statistic,
 } from 'antd';
 import {
   PlusOutlined, SendOutlined, CheckCircleOutlined, CloseCircleOutlined,
@@ -15,6 +15,8 @@ import {
 import dayjs, { type Dayjs } from 'dayjs';
 import {
   listApprovals, getApproval, createApproval, submitApproval,
+  getApprovalsSummary,
+  type ApprovalsSummary,
   previewRouting, decideAuthority, cancelApproval, markApprovalFlown,
   preflightCheck, type FlightApproval, type PreflightResult,
   batchSubmitApprovals, batchSecondApproveApprovals, secondApproveApproval,
@@ -81,11 +83,15 @@ export default function ApprovalsPage() {
   // via created_from / created_to; the table itself is not filtered
   // (no created_at column shown in the current UI).
   const [exportRange, setExportRange] = useState<[Dayjs, Dayjs] | null>(null);
+  // T8.1 — dashboard summary counters shown above the table.
+  const [summary, setSummary] = useState<ApprovalsSummary | null>(null);
 
   const load = async () => {
     setLoading(true);
     try {
       setRows(await listApprovals());
+      // T8.1 — summary is best-effort; failure is silent
+      getApprovalsSummary().then(setSummary).catch(() => {});
     } catch (e: any) {
       message.error('加载失败');
     } finally {
@@ -435,6 +441,36 @@ export default function ApprovalsPage() {
             </Button>
           </Space>
         </div>
+
+        {/* T8.1 — dashboard summary strip. Non-blocking; rendered only
+            when the /summary call succeeded. */}
+        {summary && (
+          <Card size="small" style={{ marginBottom: 12 }}>
+            <Space size="large" wrap>
+              <Statistic title="申请总数" value={summary.total} />
+              <Statistic
+                title="进行中"
+                value={summary.in_flight}
+                valueStyle={{ color: '#faad14' }}
+              />
+              <Statistic
+                title="近 7 天新增"
+                value={summary.submitted_last_7d}
+                valueStyle={{ color: '#1677ff' }}
+              />
+              <Statistic
+                title="已批准"
+                value={summary.status_counts?.approved ?? 0}
+                valueStyle={{ color: '#52c41a' }}
+              />
+              <Statistic
+                title="已驳回"
+                value={summary.status_counts?.rejected ?? 0}
+                valueStyle={{ color: '#ff4d4f' }}
+              />
+            </Space>
+          </Card>
+        )}
 
         <Card>
           <Table

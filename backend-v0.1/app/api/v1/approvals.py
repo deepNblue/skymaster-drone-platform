@@ -314,6 +314,52 @@ async def list_approvals(
     return list(rows)
 
 
+@router.get("/summary")
+async def approvals_summary(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """T8.1 — dashboard summary counters for the caller's tenant.
+
+    Returns counts by ``status`` plus a 7-day submission trend. Cheap
+    (2 aggregation queries) and cached at the client for a few minutes.
+    """
+    from datetime import datetime, timedelta, timezone as _tz
+    from sqlalchemy import func as _func
+
+    tenant = user.org_id
+    # Status buckets — all rows for the tenant
+    status_rows = (await db.execute(
+        select(FlightApproval.status, _func.count(FlightApproval.id))
+        .where(FlightApproval.tenant_id == tenant)
+        .group_by(FlightApproval.status)
+    )).all()
+    status_counts = {s or "unknown": int(c) for s, c in status_rows}
+
+    # 7-day submission trend
+    cutoff = datetime.now(_tz.utc) - timedelta(days=7)
+    recent = (await db.execute(
+        select(_func.count(FlightApproval.id))
+        .where(
+            FlightApproval.tenant_id == tenant,
+            FlightApproval.created_at >= cutoff,
+        )
+    )).scalar_one()
+
+    # In-flight = submitted + under_review (approvals not yet decided)
+    in_flight = (
+        status_counts.get("submitted", 0)
+        + status_counts.get("under_review", 0)
+    )
+
+    return {
+        "status_counts": status_counts,
+        "submitted_last_7d": int(recent or 0),
+        "in_flight": in_flight,
+        "total": sum(status_counts.values()),
+    }
+
+
 # ---------------------------------------------------------------------------
 # T7.8 — Batch export approvals (CSV + certificate ZIP)
 # ---------------------------------------------------------------------------
