@@ -28,6 +28,8 @@ export interface ModelListing {
   // T5.9 — aggregate counts populated by the API layer.
   deployment_count?: number;
   version_count?: number;
+  // T5.10 — favorite state
+  favorited_by_me?: boolean;
 }
 
 export interface ModelVersion {
@@ -167,4 +169,20 @@ export async function getUsageDaily(
     params: { since_days },
   });
   return data as UsageDailySeries;
+}
+
+// ---------------------------------------------------------------------------
+// T5.10 — Favorites (bookmarks)
+// ---------------------------------------------------------------------------
+export async function favoriteListing(lid: string): Promise<void> {
+  await api.post(`${BASE}/listings/${lid}/favorite`);
+}
+
+export async function unfavoriteListing(lid: string): Promise<void> {
+  await api.delete(`${BASE}/listings/${lid}/favorite`);
+}
+
+export async function listMyFavorites(): Promise<ModelListing[]> {
+  const { data } = await api.get(`${BASE}/favorites`);
+  return data as ModelListing[];
 }

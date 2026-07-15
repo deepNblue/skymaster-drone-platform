@@ -33,18 +33,23 @@ import {
   CloudDownloadOutlined,
   DollarOutlined,
   PlusOutlined,
+  ReloadOutlined,
   StarFilled,
+  StarOutlined,
   ThunderboltOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
   createModelListing,
+  favoriteListing,
   listModelListings,
   listMyDeployments,
+  listMyFavorites,
   ModelDeployment,
   ModelListing,
   PriceModel,
+  unfavoriteListing,
 } from '@/lib/model_marketplace';
 
 const { Title, Text, Paragraph } = Typography;
@@ -85,6 +90,9 @@ export default function ModelMarketplacePage() {
 
   const [deployments, setDeployments] = useState<ModelDeployment[]>([]);
   const [depLoading, setDepLoading] = useState(true);
+  // T5.10 — favorites filter toggle
+  const [favOnly, setFavOnly] = useState(false);
+  const [busyFav, setBusyFav] = useState<string | null>(null);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -93,15 +101,22 @@ export default function ModelMarketplacePage() {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await listModelListings({ task, framework, tag, limit: 60 });
-      setListings(res.items);
-      setTotal(res.total);
+      if (favOnly) {
+        // T5.10 — dedicated favorites endpoint
+        const rows = await listMyFavorites();
+        setListings(rows);
+        setTotal(rows.length);
+      } else {
+        const res = await listModelListings({ task, framework, tag, limit: 60 });
+        setListings(res.items);
+        setTotal(res.total);
+      }
     } catch (e: any) {
       message.error(`加载失败: ${e?.response?.data?.detail ?? e.message}`);
     } finally {
       setLoading(false);
     }
-  }, [task, framework, tag]);
+  }, [task, framework, tag, favOnly]);
 
   const reloadDeps = useCallback(async () => {
     setDepLoading(true);
@@ -189,7 +204,14 @@ export default function ModelMarketplacePage() {
           </Text>
         </Space>
         <Space>
-          <Button icon={<StarFilled />} onClick={reload}>
+          <Button
+            icon={favOnly ? <StarFilled style={{ color: '#faad14' }} /> : <StarOutlined />}
+            type={favOnly ? 'primary' : 'default'}
+            onClick={() => setFavOnly((v) => !v)}
+          >
+            {favOnly ? '仅收藏' : '收藏'}
+          </Button>
+          <Button icon={<ReloadOutlined />} onClick={reload}>
             刷新
           </Button>
           <Button
@@ -240,6 +262,48 @@ export default function ModelMarketplacePage() {
                       style={{ height: '100%' }}
                       onClick={() =>
                         router.push(`/dashboard/model-marketplace/${l.id}`)
+                      }
+                      extra={
+                        // T5.10 — star button. stopPropagation so clicking
+                        // the star doesn't navigate to the detail page.
+                        <Button
+                          size="small"
+                          type="text"
+                          loading={busyFav === l.id}
+                          icon={
+                            l.favorited_by_me ? (
+                              <StarFilled style={{ color: '#faad14' }} />
+                            ) : (
+                              <StarOutlined />
+                            )
+                          }
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            setBusyFav(l.id);
+                            try {
+                              if (l.favorited_by_me) {
+                                await unfavoriteListing(l.id);
+                                message.success('已取消收藏');
+                              } else {
+                                await favoriteListing(l.id);
+                                message.success('已收藏');
+                              }
+                              setListings((rows) =>
+                                rows.map((r) =>
+                                  r.id === l.id
+                                    ? { ...r, favorited_by_me: !r.favorited_by_me }
+                                    : r,
+                                ),
+                              );
+                            } catch (err: any) {
+                              message.error(
+                                `操作失败: ${err?.response?.data?.detail ?? err.message}`,
+                              );
+                            } finally {
+                              setBusyFav(null);
+                            }
+                          }}
+                        />
                       }
                     >
                       <Space direction="vertical" size={4} style={{ width: '100%' }}>

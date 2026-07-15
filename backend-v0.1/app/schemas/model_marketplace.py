@@ -51,6 +51,8 @@ class ListingOut(BaseModel):
     # listings on the marketplace grid.
     deployment_count: int = 0
     version_count: int = 0
+    # T5.10 — populated by the API layer per caller.
+    favorited_by_me: bool = False
 
 
 class ListingPage(BaseModel):

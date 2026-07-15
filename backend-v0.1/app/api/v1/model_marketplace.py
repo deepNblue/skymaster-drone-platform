@@ -35,7 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
 from app.deps import get_current_user
 from app.models.model_marketplace import (
-    ModelDeployment, ModelListing, ModelUsageEvent, ModelVersion,
+    ModelDeployment, ModelFavorite, ModelListing, ModelUsageEvent, ModelVersion,
 )
 from app.models.user import User
 from app.schemas.model_marketplace import (
@@ -177,10 +177,21 @@ async def list_listings(
         ver_counts = {lid: n for lid, n in ver_rows}
 
     items = []
+    # T5.10 — batch-fetch favorited listing IDs for this caller in one hit
+    fav_ids: set = set()
+    if listing_ids:
+        fav_rows = (await db.execute(
+            select(ModelFavorite.listing_id).where(
+                ModelFavorite.user_id == user.id,
+                ModelFavorite.listing_id.in_(listing_ids),
+            )
+        )).all()
+        fav_ids = {row[0] for row in fav_rows}
     for r in rows:
         out = ListingOut.model_validate(r)
         out.deployment_count = dep_counts.get(r.id, 0)
         out.version_count = ver_counts.get(r.id, 0)
+        out.favorited_by_me = r.id in fav_ids
         items.append(out)
     return ListingPage(total=total, items=items)
 
@@ -226,6 +237,107 @@ async def get_listing(
     out = ListingOut.model_validate(listing)
     out.deployment_count = dep_count
     out.version_count = ver_count
+    # T5.10 — favorited_by_me
+    fav = (await db.execute(
+        select(ModelFavorite.id).where(
+            ModelFavorite.user_id == user.id,
+            ModelFavorite.listing_id == listing.id,
+        )
+    )).scalar_one_or_none()
+    out.favorited_by_me = fav is not None
+    return out
+
+
+# ---------------------------------------------------------------------------
+# T5.10 — Favorites (bookmarks)
+# ---------------------------------------------------------------------------
+@router.post(
+    "/listings/{lid}/favorite",
+    status_code=status.HTTP_201_CREATED,
+)
+async def favorite_listing(
+    lid: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Idempotent star. Second call is a no-op that still returns 201."""
+    listing = (await db.execute(
+        select(ModelListing).where(ModelListing.id == lid)
+    )).scalar_one_or_none()
+    if not listing:
+        raise HTTPException(status_code=404, detail="listing not found")
+    existing = (await db.execute(
+        select(ModelFavorite).where(
+            ModelFavorite.user_id == user.id,
+            ModelFavorite.listing_id == lid,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        return {"favorited": True, "id": str(existing.id)}
+    row = ModelFavorite(user_id=user.id, listing_id=lid)
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return {"favorited": True, "id": str(row.id)}
+
+
+@router.delete("/listings/{lid}/favorite", status_code=status.HTTP_200_OK)
+async def unfavorite_listing(
+    lid: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Idempotent unstar. Missing row → 200 with favorited=False."""
+    from sqlalchemy import delete
+    await db.execute(
+        delete(ModelFavorite).where(
+            ModelFavorite.user_id == user.id,
+            ModelFavorite.listing_id == lid,
+        )
+    )
+    await db.commit()
+    return {"favorited": False}
+
+
+@router.get("/favorites", response_model=list[ListingOut])
+async def list_my_favorites(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[ListingOut]:
+    """Current user's starred listings — decorated w/ same aggregates."""
+    rows = (await db.execute(
+        select(ModelListing).join(
+            ModelFavorite,
+            ModelFavorite.listing_id == ModelListing.id,
+        ).where(ModelFavorite.user_id == user.id)
+        .order_by(ModelFavorite.created_at.desc())
+    )).scalars().all()
+    listing_ids = [r.id for r in rows]
+    if not listing_ids:
+        return []
+    dep_rows = (await db.execute(
+        select(ModelVersion.listing_id, func.count(ModelDeployment.id))
+        .join(ModelVersion, ModelVersion.id == ModelDeployment.version_id)
+        .where(
+            ModelVersion.listing_id.in_(listing_ids),
+            ModelDeployment.status.in_(["installed", "active"]),
+        )
+        .group_by(ModelVersion.listing_id)
+    )).all()
+    ver_rows = (await db.execute(
+        select(ModelVersion.listing_id, func.count(ModelVersion.id))
+        .where(ModelVersion.listing_id.in_(listing_ids))
+        .group_by(ModelVersion.listing_id)
+    )).all()
+    dep_counts = {lid: n for lid, n in dep_rows}
+    ver_counts = {lid: n for lid, n in ver_rows}
+    out = []
+    for r in rows:
+        item = ListingOut.model_validate(r)
+        item.deployment_count = dep_counts.get(r.id, 0)
+        item.version_count = ver_counts.get(r.id, 0)
+        item.favorited_by_me = True
+        out.append(item)
     return out
 
 
