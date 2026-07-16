@@ -391,14 +391,29 @@ async function runTests() {
         description: '...',
         dsl_yaml: '# ok\nversion: "0.1"\nname: x\nsteps: []',
         sample_inputs: {},
+        tags: ['ops', 'readonly'],
       },
     ]);
     const rows = await listPlaybooks();
     assert.strictEqual(rows.length, 1);
     assert.strictEqual(rows[0].slug, 'morning-inspection');
+    assert.deepStrictEqual(rows[0].tags, ['ops', 'readonly']);
     assert.ok(
       calls[0].url.endsWith('/api/v1/copilot/workflows/playbooks'),
     );
+  });
+
+  await test('listPlaybooks with tag param', async () => {
+    responder = () => jsonResp(200, []);
+    await listPlaybooks({ tag: 'domain' });
+    assert.match(calls[0].url, /\/playbooks\?tag=domain$/);
+  });
+
+  await test('listPlaybooks with tag+q composes', async () => {
+    responder = () => jsonResp(200, []);
+    await listPlaybooks({ tag: 'domain', q: '巡' });
+    assert.match(calls[0].url, /tag=domain/);
+    assert.match(calls[0].url, /q=/); // urlencoded, don't assert value
   });
 
   await test('listPlaybooks throws on 500', async () => {
@@ -416,6 +431,7 @@ async function runTests() {
       description: '...',
       dsl_yaml: '# doc\nversion: "0.1"\nname: y\nsteps: []',
       sample_inputs: {},
+      tags: ['ops', 'audit'],
     });
     const pb = await getPlaybook('compliance-patrol');
     assert.strictEqual(pb.slug, 'compliance-patrol');

@@ -128,6 +128,9 @@ export default function CopilotWorkflowsPage() {
   const [pbOpen, setPbOpen] = useState(false);
   const [pbList, setPbList] = useState<Playbook[]>([]);
   const [pbLoading, setPbLoading] = useState(false);
+  // T11.4: filter state, sticky within the modal session.
+  const [pbTag, setPbTag] = useState<string>('');
+  const [pbSearch, setPbSearch] = useState<string>('');
 
   const isNew = selectedId === null;
 
@@ -168,20 +171,34 @@ export default function CopilotWorkflowsPage() {
     setRun(null);
   };
 
-  // ------- Playbook picker (T11.1) -------
-  const openPlaybookPicker = useCallback(async () => {
-    setPbOpen(true);
-    if (pbList.length > 0) return; // cached
+  // ------- Playbook picker (T11.1 / T11.4) -------
+  const loadPlaybooks = useCallback(async () => {
     setPbLoading(true);
     try {
-      const items = await listPlaybooks();
+      const items = await listPlaybooks({
+        tag: pbTag || undefined,
+        q: pbSearch.trim() || undefined,
+      });
       setPbList(items);
     } catch (e: any) {
       message.error(`Playbook 加载失败: ${e?.message ?? e}`);
     } finally {
       setPbLoading(false);
     }
-  }, [pbList.length]);
+  }, [pbTag, pbSearch]);
+
+  const openPlaybookPicker = useCallback(async () => {
+    setPbOpen(true);
+    await loadPlaybooks();
+  }, [loadPlaybooks]);
+
+  // Reload whenever filter changes while modal open.
+  useEffect(() => {
+    if (pbOpen) {
+      void loadPlaybooks();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pbTag]);
 
   /** Fork one playbook into a fresh unsaved draft. User can then edit + Save
    *  to persist under their org — never modifies the seed row. */
@@ -609,8 +626,61 @@ export default function CopilotWorkflowsPage() {
         open={pbOpen}
         onCancel={() => setPbOpen(false)}
         footer={null}
-        width={680}
+        width={720}
       >
+        {/* --- T11.4 filter bar --- */}
+        <Space
+          direction="horizontal"
+          size={8}
+          style={{ marginBottom: 12, width: '100%' }}
+          wrap
+        >
+          <Input
+            allowClear
+            size="small"
+            style={{ width: 220 }}
+            placeholder="按名称/描述搜索"
+            value={pbSearch}
+            onChange={(e) => setPbSearch(e.target.value)}
+            onPressEnter={() => void loadPlaybooks()}
+          />
+          <Button
+            size="small"
+            onClick={() => setPbTag('')}
+            type={pbTag === '' ? 'primary' : 'default'}
+          >
+            全部
+          </Button>
+          <Button
+            size="small"
+            onClick={() => setPbTag('ops')}
+            type={pbTag === 'ops' ? 'primary' : 'default'}
+          >
+            运维
+          </Button>
+          <Button
+            size="small"
+            onClick={() => setPbTag('domain')}
+            type={pbTag === 'domain' ? 'primary' : 'default'}
+          >
+            行业
+          </Button>
+          <Button
+            size="small"
+            onClick={() => setPbTag('readonly')}
+            type={pbTag === 'readonly' ? 'primary' : 'default'}
+          >
+            只读
+          </Button>
+          <Button
+            size="small"
+            onClick={() => setPbTag('sensitive')}
+            type={pbTag === 'sensitive' ? 'primary' : 'default'}
+          >
+            含审批
+          </Button>
+        </Space>
+
         {pbLoading ? (
           <Text type="secondary">加载中…</Text>
         ) : pbList.length === 0 ? (
@@ -641,6 +711,9 @@ export default function CopilotWorkflowsPage() {
                       </Text>
                       <div style={{ marginTop: 4 }}>
                         <Tag>{pb.slug}</Tag>
+                        {(pb.tags ?? []).map((t) => (
+                          <Tag color="geekblue" key={t}>{t}</Tag>
+                        ))}
                         {Object.keys(pb.sample_inputs).length > 0 && (
                           <Tag color="blue">带示例输入</Tag>
                         )}

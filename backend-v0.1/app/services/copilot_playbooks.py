@@ -37,6 +37,11 @@ class Playbook:
     description: str
     dsl_yaml: str
     sample_inputs: dict[str, Any]
+    # T11.4: coarse-grained taxonomy so the picker UI can filter.
+    # Keep the vocabulary small — 6 seed playbooks don't warrant a
+    # multi-level tag tree yet. Convention: first tag is the primary
+    # scenario ("ops"/"domain"), rest are secondary attributes.
+    tags: tuple[str, ...] = ()
 
 
 # ------------------------------------------------------------------------- #
@@ -82,6 +87,7 @@ MORNING_INSPECTION = Playbook(
     ),
     dsl_yaml=_MORNING_YAML,
     sample_inputs={},
+    tags=("ops", "readonly", "daily"),
 )
 
 
@@ -140,6 +146,7 @@ EMERGENCY_RESPONSE = Playbook(
     sample_inputs={
         "drone_id": "00000000-0000-0000-0000-000000000000",
     },
+    tags=("ops", "sensitive", "incident"),
 )
 
 
@@ -183,6 +190,7 @@ COMPLIANCE_PATROL = Playbook(
     ),
     dsl_yaml=_COMPLIANCE_YAML,
     sample_inputs={},
+    tags=("ops", "readonly", "audit"),
 )
 
 
@@ -249,6 +257,7 @@ CROP_PROTECTION = Playbook(
     sample_inputs={
         "drone_id": "00000000-0000-0000-0000-000000000000",
     },
+    tags=("domain", "agriculture", "sensitive"),
 )
 
 
@@ -307,6 +316,7 @@ LINE_INSPECTION = Playbook(
     ),
     dsl_yaml=_LINE_INSPECTION_YAML,
     sample_inputs={},
+    tags=("domain", "power-grid", "readonly"),
 )
 
 
@@ -370,6 +380,7 @@ SECURITY_PATROL = Playbook(
     sample_inputs={
         "drone_id": "00000000-0000-0000-0000-000000000000",
     },
+    tags=("domain", "security", "sensitive"),
 )
 
 

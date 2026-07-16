@@ -433,6 +433,7 @@ class PlaybookEntry(BaseModel):
     description: str
     dsl_yaml: str
     sample_inputs: dict[str, Any] = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
 
 
 def _pb_to_entry(pb: Playbook) -> PlaybookEntry:
@@ -442,16 +443,36 @@ def _pb_to_entry(pb: Playbook) -> PlaybookEntry:
         description=pb.description,
         dsl_yaml=pb.dsl_yaml,
         sample_inputs=pb.sample_inputs,
+        tags=list(pb.tags),
     )
 
 
 @router.get("/playbooks", response_model=list[PlaybookEntry])
 async def api_list_playbooks(
+    tag: str | None = None,
+    q: str | None = None,
     _: User = Depends(get_current_user),
 ) -> list[PlaybookEntry]:
-    """List all official playbooks. Auth-gated (no anonymous access to
-    seed content) but org-agnostic — every user sees the same catalog."""
-    return [_pb_to_entry(pb) for pb in list_playbooks()]
+    """List all official playbooks.
+
+    Optional query params:
+      * ``tag`` — return only playbooks whose ``tags`` include this value.
+      * ``q``   — case-insensitive substring match against name +
+                  description. Cheap linear scan (6 seeds ~ 12 rows in the
+                  wildest future); no index needed until we surpass 100.
+    """
+    rows = list_playbooks()
+    if tag:
+        tag_lc = tag.lower()
+        rows = [p for p in rows if tag_lc in {t.lower() for t in p.tags}]
+    if q:
+        q_lc = q.lower().strip()
+        if q_lc:
+            rows = [
+                p for p in rows
+                if q_lc in p.name.lower() or q_lc in p.description.lower()
+            ]
+    return [_pb_to_entry(pb) for pb in rows]
 
 
 @router.get("/playbooks/{slug}", response_model=PlaybookEntry)

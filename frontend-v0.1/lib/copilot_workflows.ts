@@ -270,13 +270,20 @@ export interface Playbook {
   description: string;
   dsl_yaml: string;
   sample_inputs: Record<string, unknown>;
+  tags: string[];
 }
 
-export async function listPlaybooks(): Promise<Playbook[]> {
-  const resp = await fetch(
-    `${baseURL}/api/v1/copilot/workflows/playbooks`,
-    { headers: authHeaders() },
-  );
+export async function listPlaybooks(opts: {
+  tag?: string;
+  q?: string;
+} = {}): Promise<Playbook[]> {
+  const params = new URLSearchParams();
+  if (opts.tag) params.set('tag', opts.tag);
+  if (opts.q) params.set('q', opts.q);
+  const qs = params.toString();
+  const url =
+    `${baseURL}/api/v1/copilot/workflows/playbooks${qs ? '?' + qs : ''}`;
+  const resp = await fetch(url, { headers: authHeaders() });
   if (!resp.ok) {
     throw new Error(`playbooks: HTTP ${resp.status}`);
   }

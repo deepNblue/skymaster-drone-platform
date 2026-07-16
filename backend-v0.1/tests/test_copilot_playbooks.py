@@ -108,9 +108,97 @@ async def test_list_playbooks_returns_all(client) -> None:
     for row in rows:
         assert set(row.keys()) >= {
             "slug", "name", "description", "dsl_yaml", "sample_inputs",
+            "tags",
         }
         assert row["dsl_yaml"].startswith("#")
         assert isinstance(row["sample_inputs"], dict)
+        assert isinstance(row["tags"], list)
+
+
+# =========================================== T11.4: tag/search filters ===
+
+async def test_list_playbooks_filter_by_tag(client) -> None:
+    """Domain playbooks (tag='domain') should be exactly the 3 new
+    ones from T11.3; ops playbooks (tag='ops') the 3 originals."""
+    tok = await _mkuser()
+
+    r_dom = await client.get(
+        "/api/v1/copilot/workflows/playbooks?tag=domain",
+        headers=_h(tok),
+    )
+    assert r_dom.status_code == 200
+    domain_slugs = {row["slug"] for row in r_dom.json()}
+    assert domain_slugs == {
+        "crop-protection", "line-inspection", "security-patrol",
+    }
+
+    r_ops = await client.get(
+        "/api/v1/copilot/workflows/playbooks?tag=ops",
+        headers=_h(tok),
+    )
+    ops_slugs = {row["slug"] for row in r_ops.json()}
+    assert ops_slugs == {
+        "morning-inspection", "emergency-response", "compliance-patrol",
+    }
+
+
+async def test_list_playbooks_filter_by_tag_case_insensitive(client) -> None:
+    tok = await _mkuser()
+    r = await client.get(
+        "/api/v1/copilot/workflows/playbooks?tag=SENSITIVE",
+        headers=_h(tok),
+    )
+    slugs = {row["slug"] for row in r.json()}
+    # emergency + crop + security all carry a sensitive tool.
+    assert slugs == {"emergency-response", "crop-protection", "security-patrol"}
+
+
+async def test_list_playbooks_filter_by_tag_unknown_returns_empty(
+    client,
+) -> None:
+    tok = await _mkuser()
+    r = await client.get(
+        "/api/v1/copilot/workflows/playbooks?tag=nonexistent",
+        headers=_h(tok),
+    )
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+async def test_list_playbooks_search_query_matches_name(client) -> None:
+    tok = await _mkuser()
+    r = await client.get(
+        "/api/v1/copilot/workflows/playbooks?q=植保",
+        headers=_h(tok),
+    )
+    rows = r.json()
+    assert len(rows) == 1
+    assert rows[0]["slug"] == "crop-protection"
+
+
+async def test_list_playbooks_search_query_matches_description(client) -> None:
+    tok = await _mkuser()
+    # Only compliance-patrol description contains "审计".
+    r = await client.get(
+        "/api/v1/copilot/workflows/playbooks?q=审计",
+        headers=_h(tok),
+    )
+    rows = r.json()
+    assert len(rows) == 1
+    assert rows[0]["slug"] == "compliance-patrol"
+
+
+async def test_list_playbooks_tag_and_query_compose(client) -> None:
+    tok = await _mkuser()
+    # domain + "巡" -> line-inspection (输电线) but NOT security-patrol
+    # (夜巡 also matches — this is the more interesting case).
+    r = await client.get(
+        "/api/v1/copilot/workflows/playbooks?tag=domain&q=巡",
+        headers=_h(tok),
+    )
+    slugs = {row["slug"] for row in r.json()}
+    # Both line-inspection (巡线) and security-patrol (夜巡) match.
+    assert slugs == {"line-inspection", "security-patrol"}
 
 
 async def test_get_playbook_by_slug(client) -> None:
