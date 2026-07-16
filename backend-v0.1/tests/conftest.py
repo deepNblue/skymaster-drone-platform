@@ -115,7 +115,7 @@ async def client() -> AsyncClient:
             scene, scene_marketplace, scene_moderation, scene_job,
             community,
             copilot_workflow, copilot_workflow_run, copilot_workflow_schedule,
-            community_playbook, approval_template,
+            community_playbook, approval_template, airspace_calendar,
         )
         try:
             async with engine.begin() as conn:
