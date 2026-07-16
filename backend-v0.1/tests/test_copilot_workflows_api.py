@@ -305,3 +305,40 @@ async def test_run_reports_step_failure_as_200_with_failed_status(client):
     assert body["status"] == "failed"
     assert body["steps"][0]["status"] == "failed"
     assert "interpolation" in (body["steps"][0]["error"] or "").lower()
+
+
+# ============================================================ on_failure =
+
+
+async def test_run_on_failure_continue_end_to_end(client):
+    """T10.4: `on_failure: continue` returns HTTP 200 with run.status=ok
+    even when a step failed — the trace still records the failure."""
+    tok = await _mkuser()
+    r = await client.post(
+        "/api/v1/copilot/workflows/run",
+        headers=_h(tok),
+        json={
+            "workflow": {
+                "version": "0.1", "name": "tolerated",
+                "steps": [
+                    # step a fails at interp time (${input.missing_id}
+                    # is not provided) but we tolerate it.
+                    {"id": "a", "tool": "get_drone_status",
+                     "args": {"drone_id": "${input.missing_id}"},
+                     "on_failure": "continue"},
+                    # step b is independent, must complete
+                    {"id": "b", "tool": "list_drones", "args": {}},
+                ],
+            },
+            "inputs": {},
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # Run itself stays green because the only failure was tolerated.
+    assert body["status"] == "ok"
+    assert body["error"] is None
+    steps = {s["id"]: s for s in body["steps"]}
+    assert steps["a"]["status"] == "failed"
+    assert "interpolation" in (steps["a"]["error"] or "").lower()
+    assert steps["b"]["status"] == "ok"

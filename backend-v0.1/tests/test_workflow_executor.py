@@ -343,3 +343,87 @@ async def test_run_ctx_passed_through_to_tool():
     assert run.status == STEP_OK
     assert seen["org_id"] == ctx.org_id
     assert seen["user_id"] == ctx.user_id
+
+
+# =========================================================================
+#  T10.4 · on_failure semantics                                            #
+# =========================================================================
+
+
+async def test_on_failure_continue_keeps_run_alive():
+    """Tolerated step failure -> run.status stays 'ok', trace records
+    step as failed; a downstream sibling that does NOT depend on it
+    keeps running."""
+    reg = _mk_registry()
+    doc = parse_workflow({
+        "version": DSL_VERSION, "name": "tol",
+        "steps": [
+            {"id": "a", "tool": "boom", "args": {"fail": True},
+             "on_failure": "continue"},
+            {"id": "b", "tool": "echo", "args": {"msg": "still-here"}},
+        ],
+    })
+    run = await WorkflowExecutor(reg).run(doc)
+    assert run.status == STEP_OK  # run itself stays green
+    assert run.step("a").status == STEP_FAILED
+    assert "kaboom" in (run.step("a").error or "")
+    assert run.step("b").status == STEP_OK  # sibling completes
+
+
+async def test_on_failure_continue_downstream_ref_still_fails_at_interp():
+    """Even with `on_failure: continue`, a *dependent* step that reads
+    `${steps.a.result.…}` must fail at interpolation time — we don't
+    invent a result. That dependent's on_failure controls what happens
+    next."""
+    reg = _mk_registry()
+    doc = parse_workflow({
+        "version": DSL_VERSION, "name": "tol-dep",
+        "steps": [
+            {"id": "a", "tool": "boom", "args": {"fail": True},
+             "on_failure": "continue"},
+            # b depends on a's result -> must interp-fail
+            {"id": "b", "tool": "echo",
+             "args": {"msg": "${steps.a.result.something}"},
+             "depends_on": ["a"]},
+        ],
+    })
+    run = await WorkflowExecutor(reg).run(doc)
+    # b fails fatally (default on_failure="fail") -> run failed
+    assert run.status == STEP_FAILED
+    assert run.step("a").status == STEP_FAILED
+    assert run.step("b").status == STEP_FAILED
+    assert "interpolation" in (run.step("b").error or "")
+
+
+async def test_on_failure_fail_default_short_circuits():
+    """Reaffirm T10.2 semantics: absent `on_failure`, first failure is
+    fatal and downstream pending steps -> SKIPPED."""
+    reg = _mk_registry()
+    doc = parse_workflow({
+        "version": DSL_VERSION, "name": "default-fail",
+        "steps": [
+            {"id": "a", "tool": "boom", "args": {"fail": True}},
+            {"id": "b", "tool": "echo", "args": {"msg": "unreachable"}},
+        ],
+    })
+    run = await WorkflowExecutor(reg).run(doc)
+    assert run.status == STEP_FAILED
+    assert run.step("a").status == STEP_FAILED
+    assert run.step("b").status == STEP_SKIPPED
+
+
+async def test_on_failure_continue_records_reason_but_not_run_error():
+    """Tolerated failures MUST NOT bubble up as run.error — that field
+    is reserved for fatal failures, so callers can rely on it."""
+    reg = _mk_registry()
+    doc = parse_workflow({
+        "version": DSL_VERSION, "name": "no-bubble",
+        "steps": [
+            {"id": "a", "tool": "boom", "args": {"fail": True},
+             "on_failure": "continue"},
+        ],
+    })
+    run = await WorkflowExecutor(reg).run(doc)
+    assert run.status == STEP_OK
+    assert run.error is None  # <-- key invariant
+    assert run.step("a").error and "kaboom" in run.step("a").error

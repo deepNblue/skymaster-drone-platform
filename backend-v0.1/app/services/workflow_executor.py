@@ -262,23 +262,46 @@ class WorkflowExecutor:
             run.steps.append(StepResult(id=sid, tool=by_id[sid].tool))
         results_by_id: dict[str, StepResult] = {s.id: s for s in run.steps}
 
+        # Track which steps failed with on_failure="fail" (fatal), vs
+        # steps that failed but were tolerated (continue) — the latter
+        # keep the run alive.
+        any_fatal_failure = False
         try:
             for sid in order:
+                step_def = by_id[sid]
                 await self._exec_one(
-                    step_def=by_id[sid],
+                    step_def=step_def,
                     sr=results_by_id[sid],
                     run=run,
                     results_by_id=results_by_id,
                     ctx=ctx,
                 )
-                if run.status == STEP_FAILED:
+                sr = results_by_id[sid]
+                if sr.status == STEP_FAILED:
+                    if step_def.on_failure == "continue":
+                        # Tolerate this step; keep going. Downstream
+                        # steps that ${steps.sid.result.…} will still
+                        # blow up at interp time — safety over
+                        # aggression: we don't second-guess the author.
+                        log.info(
+                            "workflow %s step %s failed but on_failure="
+                            "'continue'; keeping run alive",
+                            run.workflow_name, sid,
+                        )
+                        continue
+                    any_fatal_failure = True
+                    run.status = STEP_FAILED
+                    if not run.error:
+                        run.error = f"step {sr.id!r} failed: {sr.error}"
                     # Short-circuit: mark all downstream pending → skipped.
                     for other_id in order:
                         other = results_by_id[other_id]
                         if other.status == STEP_PENDING:
                             other.status = STEP_SKIPPED
                     break
-            if run.status != STEP_FAILED:
+            if not any_fatal_failure:
+                # Even if some tolerated steps failed, the run itself
+                # is 'ok' — the trace tells the full story.
                 run.status = STEP_OK
         finally:
             run.finished_at = time.monotonic()
@@ -311,8 +334,7 @@ class WorkflowExecutor:
                 (sr.finished_at - sr.started_at) * 1000
             )
             log.warning("workflow step %s interp failed: %s", sr.id, e)
-            run.status = STEP_FAILED
-            run.error = f"step {sr.id!r} failed: {sr.error}"
+            # run.status decided by outer loop based on step.on_failure
             return
 
         # 2) Dispatch via the registry — reuses args_schema validation.
@@ -332,8 +354,7 @@ class WorkflowExecutor:
             log.exception(
                 "workflow step %s tool %s raised", sr.id, step_def.tool
             )
-            run.status = STEP_FAILED
-            run.error = f"step {sr.id!r} failed: {sr.error}"
+            # run.status decided by outer loop based on step.on_failure
             return
 
         # 3) Success. Normalise result to a dict for downstream refs.
@@ -347,8 +368,7 @@ class WorkflowExecutor:
             sr.duration_ms = int(
                 (sr.finished_at - sr.started_at) * 1000
             )
-            run.status = STEP_FAILED
-            run.error = f"step {sr.id!r} failed: {sr.error}"
+            # run.status decided by outer loop based on step.on_failure
             return
 
         sr.result = result

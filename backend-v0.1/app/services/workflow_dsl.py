@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -70,6 +70,16 @@ class WorkflowStep(BaseModel):
     tool: str = Field(..., min_length=1)
     args: dict[str, Any] = Field(default_factory=dict)
     depends_on: list[str] = Field(default_factory=list)
+    on_failure: Literal["fail", "continue"] = Field(
+        default="fail",
+        description=(
+            "Controls short-circuit behaviour when this step fails. "
+            "'fail' (default): mark the run failed and skip downstream "
+            "pending steps. 'continue': record the step as failed but "
+            "keep the run going. Descendants that reference this step's "
+            "result still fail at interp time — safety over aggression."
+        ),
+    )
 
 
 class WorkflowDoc(BaseModel):

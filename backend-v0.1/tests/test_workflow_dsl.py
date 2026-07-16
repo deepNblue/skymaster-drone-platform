@@ -386,3 +386,52 @@ def test_validate_unknown_scope_rejected():
     })
     with pytest.raises(WorkflowSemanticError, match="unknown ref scope"):
         validate_workflow(doc, reg)
+
+
+# =========================================================================
+#  T10.4 · on_failure DSL field                                            #
+# =========================================================================
+
+
+def test_step_on_failure_defaults_to_fail():
+    """Backward compat: absent on_failure means 'fail' (default T10.2
+    behaviour) so no existing workflow changes semantics after T10.4."""
+    doc = parse_workflow({
+        "version": DSL_VERSION, "name": "n",
+        "steps": [{"id": "s", "tool": "echo",
+                   "args": {"msg": "hi"}}],
+    })
+    assert doc.steps[0].on_failure == "fail"
+
+
+def test_step_on_failure_accepts_continue():
+    doc = parse_workflow({
+        "version": DSL_VERSION, "name": "n",
+        "steps": [{"id": "s", "tool": "echo",
+                   "args": {"msg": "hi"},
+                   "on_failure": "continue"}],
+    })
+    assert doc.steps[0].on_failure == "continue"
+
+
+def test_step_on_failure_rejects_unknown_value():
+    with pytest.raises(WorkflowSyntaxError):
+        parse_workflow({
+            "version": DSL_VERSION, "name": "n",
+            "steps": [{"id": "s", "tool": "echo",
+                       "args": {"msg": "hi"},
+                       "on_failure": "retry"}],
+        })
+
+
+def test_step_on_failure_rejects_boolean_value():
+    """Reject truthy shortcuts like on_failure: true — the field is a
+    small closed enum, not a boolean."""
+    with pytest.raises(WorkflowSyntaxError):
+        parse_workflow({
+            "version": DSL_VERSION, "name": "n",
+            "steps": [{"id": "s", "tool": "echo",
+                       "args": {"msg": "hi"},
+                       "on_failure": True}],
+        })
+        validate_workflow(doc, reg)
