@@ -7,7 +7,7 @@
 
 ---
 
-## ✅ 结论：**100 机 SLA 完全达标**（四场景全绿）
+## ✅ 结论：**100 机 SLA 完全达标**（五场景全绿）
 
 ### 场景 A · 应用层内联 Mock（无网络栈）
 
@@ -60,6 +60,31 @@
 - `batch` 不开 WAL 反而慢 60×：因每次 executemany 触发全局 fsync + rollback journal
 - `batch + WAL` 才是最优组合（P95 比 single 快 26×，比 batch 快 61×）
 - 100 机 1Hz 场景对 SQLite 而言压力毛毛雨，理论可撑 12800 机
+
+### 场景 E · SSE Fanout（v2.x SSE 通路 baseline）⭐️ 新增
+
+**基础配置**（100 源 × 30 订阅 × 每订阅 10 源 = 300 订阅关系）：
+
+| 指标 | SLA 阈值 | 实测值 | 富余 |
+|------|----------|--------|------|
+| fanout 延迟 P95 | < 100 ms | **1.97 ms** | 51× |
+| 消息完整率 | ≥ 95% | **100%** (6000/6000) | ✅ |
+| CPU 峰值 | < 80% | **1.0%** | 80× |
+
+**极限压力**（500 源 × 100 订阅 × 每订阅 50 源 = 5000 订阅关系，10 万事件/22s）：
+
+| 指标 | 实测值 |
+|------|--------|
+| fanout 延迟 P95 | 30.4 ms（仍满足 SLA） |
+| P99 | 48.2 ms |
+| 消息完整率 | 100% (100000/100000) |
+| CPU 峰值 | 75.6% |
+| 内存漂移 | +19.8 MB |
+
+**关键洞见**：
+- 基础配置下 SSE 通路延迟比 v1.x WebSocket 稍高（1.97ms vs 0.54ms），但仍富余 51×
+- 500 源 × 100 订阅这种"大集群 + 多屏观察"场景下 CPU 达到 75.6%，逼近拐点
+- v2.x 当前 `scenes.py` 是 "每 request 独立 poll DB" 的实现，本 baseline 是"理想 pub/sub"上限，实际生产会更慢；v2.1 需要把 poll-based 迁移到 pub/sub 才能达到本 baseline 表现
 
 ---
 
@@ -202,6 +227,16 @@ python3 -m backend.tests.load.run_100_drones_db --duration 30 --mode batch_wal
 
 > ✅ 已纳入 CI（`.github/workflows/backend-load-test.yml`，仅跑 batch_wal 单策略）
 
+**场景 E（SSE Fanout · v2.x SSE 通路）**：
+```bash
+# 基础配置
+python3 -m backend.tests.load.run_sse_fanout --duration 30
+
+# 极限压力 (500 源 × 100 订阅 × 每订阅 50 源)
+python3 -m backend.tests.load.run_sse_fanout \
+  --sources 500 --subs 100 --sources-per-sub 50 --duration 30
+```
+
 **场景 C（REST API）** ⚠️ 未进 CI：因需 uvicorn 独立进程 + 客户端后台编排，保持手动跑：
 ```bash
 # 终端 1：启动 api_server（内置 100 台无人机 + REST 端点）
@@ -239,6 +274,7 @@ python3 -m backend.tests.load.run_100_drones_api --duration 30 --users 50 --port
 | `backend/tests/load/run_100_drones_ws.py` | 场景 B 客户端压测器 |
 | `backend/tests/load/api_server.py` | 场景 C FastAPI 服务器（REST + WS） |
 | `backend/tests/load/run_100_drones_api.py` | 场景 C REST 压测器 |
-| `backend/tests/load/run_100_drones_db.py` ⭐️ | 场景 D 数据库入库压测（三策略对比） |
+| `backend/tests/load/run_100_drones_db.py` | 场景 D 数据库入库压测（三策略对比） |
+| `backend/tests/load/run_sse_fanout.py` ⭐️ | 场景 E v2.x SSE Fanout baseline |
 | `backend/tests/load/README.md` | 使用说明 |
-| `.github/workflows/backend-load-test.yml` | CI 关卡（跑场景 A） |
+| `.github/workflows/backend-load-test.yml` | CI 关卡（跑场景 A/B/D） |
