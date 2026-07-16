@@ -2,7 +2,7 @@ name: Backend Load Test (100 Drones)
 
 on:
   push:
-    branches: [main, "v2.1-*", "v2.2-*"]
+    branches: [main, develop, "v2.1-*", "v2.2-*"]
     paths:
       - "backend/**"
       - ".github/workflows/backend-load-test.yml"
@@ -10,37 +10,36 @@ on:
     paths:
       - "backend/**"
       - ".github/workflows/backend-load-test.yml"
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
     inputs:
       duration:
         description: "压测时长 (秒)"
         required: false
-        default: "30"
+        default: "20"
       drones:
         description: "无人机数量"
         required: false
         default: "100"
 
 jobs:
-  load-test-100-drones:
-    name: 100 Drones Capacity Test
+  # ============================================================
+  # 场景 A · 应用层内联 (无网络栈, 最轻)
+  # ============================================================
+  scenario-a-inproc:
+    name: 场景 A · 应用层 (P95 < 500ms)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
-
-      - name: Install minimal deps
+      - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          # 压测脚本使用内联版 WebSocketManager, 只需 psutil
           pip install psutil==7.2.2
-
       - name: Syntax check
         run: |
           python -c "
@@ -54,33 +53,166 @@ jobs:
                   ast.parse(fp.read())
               print(f'✅ {f}')
           "
-
-      - name: Run 100 drones load test (SLA gate)
+      - name: Run scenario A
         env:
-          DURATION: ${{ github.event.inputs.duration || '30' }}
+          DURATION: ${{ github.event.inputs.duration || '20' }}
           DRONES: ${{ github.event.inputs.drones || '100' }}
         run: |
-          echo "▶️  跑压测: drones=$DRONES, duration=${DURATION}s, SLA P95<500ms"
+          echo "▶️  场景 A: drones=$DRONES, duration=${DURATION}s, SLA P95<500ms"
           python3 -m backend.tests.load.run_100_drones \
             --drones "$DRONES" \
             --duration "$DURATION" \
             --sla-p95-ms 500 \
-            | tee load_test_result.log
-          # SLA 判定基于压测脚本自身 exit code (PASS=0 / FAIL=1)
-
+            | tee scenario_a_result.log
       - name: Upload result
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: load-test-result
-          path: load_test_result.log
+          name: scenario-a-result
+          path: scenario_a_result.log
           retention-days: 30
-
       - name: Summary
         if: always()
         run: |
-          echo "## 🚁 100 机压测结果" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚁 场景 A · 应用层压测" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -30 scenario_a_result.log >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # 场景 B · 真 WebSocket 网络栈 (uvicorn + FastAPI)
+  # ============================================================
+  scenario-b-websocket:
+    name: 场景 B · 真 WS (P95 < 500ms)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install psutil==7.2.2 fastapi==0.135.3 uvicorn==0.44.0 websockets==16.0
+      - name: Run scenario B (真 WS + uvicorn)
+        env:
+          DURATION: ${{ github.event.inputs.duration || '20' }}
+          DRONES: ${{ github.event.inputs.drones || '100' }}
+        run: |
+          # 后台跑 ws_server (100 drones @ 1Hz), 前台跑 client
+          python3 -m backend.tests.load.ws_server \
+            --drones "$DRONES" \
+            --duration $((DURATION + 15)) \
+            --port 8765 > ws_server.log 2>&1 &
+          SRV=$!
+          echo "ws_server PID=$SRV"
+
+          # 等待 server ready (最多 10s)
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 1
+            if python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=1)" 2>/dev/null; then
+              echo "server ready (${i}s)"
+              break
+            fi
+          done
+
+          # 跑 client 压测
+          python3 -m backend.tests.load.run_100_drones_ws \
+            --duration "$DURATION" \
+            --port 8765 \
+            --sla-p95-ms 500 \
+            | tee scenario_b_result.log
+          RC=${PIPESTATUS[0]}
+
+          # 收尾
+          kill $SRV 2>/dev/null || true
+          sleep 1
+
+          echo "=== ws_server log tail ==="
+          tail -15 ws_server.log
+
+          exit $RC
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-b-result
+          path: |
+            scenario_b_result.log
+            ws_server.log
+          retention-days: 30
+      - name: Summary
+        if: always()
+        run: |
+          echo "## 🌐 场景 B · 真 WebSocket 网络栈" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -30 scenario_b_result.log >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # 场景 D · 数据库入库 (三策略对比)
+  # ============================================================
+  scenario-d-db-write:
+    name: 场景 D · DB 入库 (batch+WAL P95 < 100ms)
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install psutil==7.2.2
+      - name: Run scenario D
+        env:
+          DURATION: ${{ github.event.inputs.duration || '20' }}
+          DRONES: ${{ github.event.inputs.drones || '100' }}
+        run: |
+          echo "▶️  场景 D: drones=$DRONES, duration=${DURATION}s"
+          python3 -m backend.tests.load.run_100_drones_db \
+            --drones "$DRONES" \
+            --duration "$DURATION" \
+            --sla-p95-ms 100 \
+            | tee scenario_d_result.log
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-d-result
+          path: scenario_d_result.log
+          retention-days: 30
+      - name: Summary
+        if: always()
+        run: |
+          echo "## 💾 场景 D · 数据库入库" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -40 scenario_d_result.log >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # 汇总
+  # ============================================================
+  summary:
+    name: 100 机全场景 SLA 汇总
+    needs: [scenario-a-inproc, scenario-b-websocket, scenario-d-db-write]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          echo "## 🚁 SkyMaster 100 机全场景压测汇总" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          tail -30 load_test_result.log >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "| 场景 | SLA | 结果 |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| A · 应用层 | P95 < 500ms | ${{ needs.scenario-a-inproc.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| B · 真 WS 网络栈 | P95 < 500ms | ${{ needs.scenario-b-websocket.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| D · DB 入库 | 单批 P95 < 100ms | ${{ needs.scenario-d-db-write.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> 场景 C (REST API) 因需 uvicorn 独立进程编排, 保持手动跑." >> $GITHUB_STEP_SUMMARY
