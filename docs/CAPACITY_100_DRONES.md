@@ -180,6 +180,8 @@ python3 -m backend.tests.load.ws_server --drones 100 --duration 90 --port 8765
 python3 -m backend.tests.load.run_100_drones_ws --duration 30 --port 8765
 ```
 
+> ✅ 已纳入 CI（`.github/workflows/backend-load-test.yml`）
+
 **场景 C（REST API）**：
 ```bash
 # 终端 1：启动 api_server（内置 100 台无人机 + REST 端点）
@@ -197,6 +199,34 @@ python3 -m backend.tests.load.run_100_drones_db --duration 30
 # 指定单一策略
 python3 -m backend.tests.load.run_100_drones_db --duration 30 --mode batch_wal
 ```
+
+> ✅ 已纳入 CI（`.github/workflows/backend-load-test.yml`，仅跑 batch_wal 单策略）
+
+**场景 C（REST API）** ⚠️ 未进 CI：因需 uvicorn 独立进程 + 客户端后台编排，保持手动跑：
+```bash
+# 终端 1：启动 api_server（内置 100 台无人机 + REST 端点）
+python3 -m backend.tests.load.api_server --drones 100 --duration 90 --port 8766
+
+# 终端 2：跑 REST 压测
+python3 -m backend.tests.load.run_100_drones_api --duration 30 --users 50 --port 8766
+```
+
+## 附：CI 关卡（`.github/workflows/backend-load-test.yml`）
+
+**触发条件**：`push` / `PR` 到 `backend/**` 或本 workflow 自身
+
+**四个 job**：
+
+| Job | 场景 | SLA 阈值 |
+|---|---|---|
+| `scenario-a-inproc` | A · 应用层 | P95 < 500 ms |
+| `scenario-b-websocket` | B · 真 WS 网络栈 | P95 < 500 ms |
+| `scenario-d-db-write` | D · DB 入库（batch+WAL） | 单批 P95 < 100 ms |
+| `summary` | 汇总输出到 Step Summary | — |
+
+**未进 CI**：场景 C（REST API）因需 uvicorn 独立进程 + 客户端后台编排，保持手动跑。
+
+**手动触发**：GitHub Actions 页面 → `Backend Load Test (100 Drones)` → `Run workflow`，可自定义 `duration` 和 `drones`。
 
 ## 附：压测代码位置
 
