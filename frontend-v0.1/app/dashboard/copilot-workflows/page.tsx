@@ -441,6 +441,11 @@ export default function CopilotWorkflowsPage() {
               定时调度
             </Button>
           </Link>
+          <Link href="/dashboard/community-playbooks">
+            <Button size="small" icon={<BookOutlined />}>
+              社区 Playbook
+            </Button>
+          </Link>
         </Space>
       </div>
 
