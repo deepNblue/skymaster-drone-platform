@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
 from app.deps import get_current_user
 from app.models.copilot_workflow import CopilotWorkflow
+from app.models.copilot_workflow_run import CopilotWorkflowRun
 from app.models.user import User
 from app.services.tool_registry import ToolContext, build_default_registry
 from app.services.workflow_dsl import (
@@ -237,6 +238,7 @@ async def validate_endpoint(
 @router.post("/run", response_model=RunResponse)
 async def run_endpoint(
     body: RunRequest,
+    db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> RunResponse:
     src = _pick_source(body.workflow_yaml, body.workflow)
@@ -256,7 +258,7 @@ async def run_endpoint(
     ctx = ToolContext(org_id=user.org_id, user_id=user.id)
     run = await WorkflowExecutor(registry).run(doc, inputs=body.inputs, ctx=ctx)
 
-    return RunResponse(
+    response = RunResponse(
         workflow_name=run.workflow_name, status=run.status,
         duration_ms=run.duration_ms,
         steps=[
@@ -269,6 +271,12 @@ async def run_endpoint(
         ],
         error=run.error,
     )
+
+    # Audit persist — inline runs have no workflow_id.
+    await _persist_run(
+        db, user, workflow_id=None, response=response,
+    )
+    return response
 
 
 # =========================================================================== #
@@ -328,6 +336,85 @@ async def list_workflows(
     ).order_by(CopilotWorkflow.updated_at.desc())
     rows = (await db.execute(q)).scalars().all()
     return [_to_record_response(r) for r in rows]
+
+
+# ------------------------------------------------------------------------- #
+# Audit endpoints (T10.8) — registered BEFORE `/{wf_id}` so that            #
+# GET /history is not swallowed by the UUID path param.                     #
+# ------------------------------------------------------------------------- #
+
+
+class RunHistoryEntry(BaseModel):
+    id: UUID
+    workflow_id: UUID | None
+    workflow_name: str
+    status: str
+    duration_ms: int
+    error: str | None
+    started_at: datetime
+
+
+class RunHistoryDetail(RunHistoryEntry):
+    """List rows omit the trace to keep payloads small; detail includes it."""
+    trace: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.get("/history", response_model=list[RunHistoryEntry])
+async def list_run_history(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+    limit: int = 50,
+    workflow_id: UUID | None = None,
+) -> list[RunHistoryEntry]:
+    """List recent workflow runs for this org, newest first.
+
+    Optionally filter by ``workflow_id`` to see the history of one
+    specific stored workflow.
+    """
+    limit = max(1, min(limit, 200))
+    q = (
+        select(CopilotWorkflowRun)
+        .where(CopilotWorkflowRun.org_id == user.org_id)
+        .order_by(CopilotWorkflowRun.started_at.desc())
+        .limit(limit)
+    )
+    if workflow_id is not None:
+        q = q.where(CopilotWorkflowRun.workflow_id == workflow_id)
+    rows = (await db.execute(q)).scalars().all()
+    return [
+        RunHistoryEntry(
+            id=r.id,
+            workflow_id=r.workflow_id,
+            workflow_name=r.workflow_name,
+            status=r.status,
+            duration_ms=r.duration_ms,
+            error=r.error,
+            started_at=r.started_at,
+        )
+        for r in rows
+    ]
+
+
+@router.get("/history/{run_id}", response_model=RunHistoryDetail)
+async def get_run_history_detail(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> RunHistoryDetail:
+    row = await db.get(CopilotWorkflowRun, run_id)
+    # 404 both on missing and cross-org — never leak existence.
+    if row is None or row.org_id != user.org_id:
+        raise HTTPException(404, "run not found")
+    return RunHistoryDetail(
+        id=row.id,
+        workflow_id=row.workflow_id,
+        workflow_name=row.workflow_name,
+        status=row.status,
+        duration_ms=row.duration_ms,
+        error=row.error,
+        started_at=row.started_at,
+        trace=row.trace_json or {},
+    )
 
 
 @router.get("/{wf_id}", response_model=WorkflowRecordResponse)
@@ -431,7 +518,7 @@ async def run_stored_workflow(
     ctx = ToolContext(org_id=user.org_id, user_id=user.id)
     run = await WorkflowExecutor(registry).run(doc, inputs=body.inputs, ctx=ctx)
 
-    return RunResponse(
+    response = RunResponse(
         workflow_name=run.workflow_name, status=run.status,
         duration_ms=run.duration_ms,
         steps=[
@@ -444,6 +531,42 @@ async def run_stored_workflow(
         ],
         error=run.error,
     )
+    # Audit persist — stored runs carry the parent workflow id.
+    await _persist_run(
+        db, user, workflow_id=row.id, response=response,
+    )
+    return response
+
+
+# =========================================================================== #
+# Helpers                                                                     #
+# =========================================================================== #
+
+
+async def _persist_run(
+    db: AsyncSession,
+    user: User,
+    *,
+    workflow_id: UUID | None,
+    response: RunResponse,
+) -> None:
+    """Insert one audit row. Never raises — audit failure must not
+    break the run itself."""
+    try:
+        db.add(CopilotWorkflowRun(
+            org_id=user.org_id,
+            user_id=user.id,
+            workflow_id=workflow_id,
+            workflow_name=response.workflow_name,
+            status=response.status,
+            duration_ms=response.duration_ms,
+            error=response.error,
+            trace_json=response.model_dump(mode="json"),
+        ))
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        log.exception("workflow run audit persist failed")
+        await db.rollback()
 
 
 __all__ = ["router"]
