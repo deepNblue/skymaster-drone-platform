@@ -28,7 +28,7 @@ def test_every_playbook_parses_and_semantic_validates() -> None:
     """Any shipped playbook that fails semantic validation would break
     the /playbooks -> Save-as flow. This test locks that invariant."""
     reg = build_default_registry()
-    assert len(PLAYBOOKS) == 3, "expected 3 seed playbooks"
+    assert len(PLAYBOOKS) == 6, "expected 6 seed playbooks"
 
     for pb in list_playbooks():
         # A) parse
@@ -42,6 +42,21 @@ def test_every_playbook_parses_and_semantic_validates() -> None:
 def test_playbook_slugs_are_unique() -> None:
     slugs = [pb.slug for pb in list_playbooks()]
     assert len(slugs) == len(set(slugs))
+
+
+def test_playbook_catalog_covers_expected_domains() -> None:
+    """Track E2.2 target: 6 seed playbooks across ops + 3 domains.
+    If someone accidentally deletes one, this fails loudly rather than
+    letting the UI silently lose a menu item."""
+    have = {pb.slug for pb in list_playbooks()}
+    assert have >= {
+        "morning-inspection",     # ops
+        "emergency-response",     # ops
+        "compliance-patrol",      # ops
+        "crop-protection",        # domain
+        "line-inspection",        # domain
+        "security-patrol",        # domain
+    }
 
 
 def test_playbook_dsl_yaml_is_nonempty_and_commented() -> None:

@@ -187,14 +187,206 @@ COMPLIANCE_PATROL = Playbook(
 
 
 # ------------------------------------------------------------------------- #
+# 4. Crop protection · 植保 (T11.3)                                         #
+# ------------------------------------------------------------------------- #
+
+_CROP_PROTECTION_YAML = """\
+# 植保 Playbook — 药剂喷洒作业前的 30 秒准备:
+#   1) 查作业地块的实时天气 (风速>4m/s 或降雨临近 → 不喷)
+#   2) 检查空域, 避免误闯限飞区 (省界/机场/自然保护区)
+#   3) 列出可派飞机, 挑电量>60% 的机
+#   4) 生成喷洒任务草稿, 走审批
+#
+# 默认坐标为四川农业大学雅安校区试验田, 请按地块改.
+version: "0.1"
+name: "crop-protection"
+description: "植保 · 药剂喷洒前置检查"
+steps:
+  # 关键决策点: 风速/降雨 -- 后续可加 on_failure 转人工判断
+  - id: field_weather
+    tool: query_weather
+    args:
+      lat: 29.9833
+      lng: 102.9917
+
+  # 检查地块所在空域, 拉一个 500m x 500m 的方框
+  - id: airspace_check
+    tool: check_airspace
+    args:
+      geo:
+        - [102.9910, 29.9825]
+        - [102.9925, 29.9825]
+        - [102.9925, 29.9842]
+        - [102.9910, 29.9842]
+
+  # 全机队, 后续 UI 侧过滤 battery>60% 且 payload='sprayer'
+  - id: available_drones
+    tool: list_drones
+    args: {}
+
+  # 生成喷洒航线草稿; sensitive, 走 approval
+  - id: draft_spray_mission
+    tool: create_mission
+    args:
+      name: "植保喷洒作业"
+      drone_id: "${input.drone_id}"
+      waypoints:
+        - [29.9830, 102.9915, 15.0]
+        - [29.9840, 102.9915, 15.0]
+        - [29.9840, 102.9922, 15.0]
+        - [29.9830, 102.9922, 15.0]
+"""
+
+CROP_PROTECTION = Playbook(
+    slug="crop-protection",
+    name="植保 · 药剂喷洒前置检查",
+    description=(
+        "作业前天气 + 空域 + 机队 + 航线草稿一次拉齐。"
+        "含 sensitive 工具 (create_mission)，触发审批。"
+        "默认坐标为川农雅安试验田，请按地块改。"
+    ),
+    dsl_yaml=_CROP_PROTECTION_YAML,
+    sample_inputs={
+        "drone_id": "00000000-0000-0000-0000-000000000000",
+    },
+)
+
+
+# ------------------------------------------------------------------------- #
+# 5. Line inspection · 巡线 (T11.3)                                         #
+# ------------------------------------------------------------------------- #
+
+_LINE_INSPECTION_YAML = """\
+# 巡线 Playbook — 输电线路日常巡检:
+#   1) 检查空域 (线路走廊多为 220kV+ 电磁干扰高发)
+#   2) 拉最近 24h 检测事件, 关注绝缘子/异物挂载类别
+#   3) 查沿线天气 (雨/雾会影响巡检图像清晰度)
+#   4) 列出已安装 CV 模型, 确认可用的异物检测模型仍在线
+#
+# 全只读组合, 可日常定时自动跑, 结果落 audit.
+version: "0.1"
+name: "line-inspection"
+description: "巡线 · 输电线路日常巡检准备"
+steps:
+  # 一小段线路走廊的空域检查 (示例: 二滩水电站 -- 500kV 线路一段)
+  - id: corridor_airspace
+    tool: check_airspace
+    args:
+      geo:
+        - [101.7833, 26.7833]
+        - [101.8000, 26.7833]
+        - [101.8000, 26.7900]
+        - [101.7833, 26.7900]
+
+  # 昨日 24h 沿线巡检检出, 阈值放宽到 0.4 减少漏检
+  - id: yesterday_defects
+    tool: list_detections
+    args:
+      since_minutes: 1440
+      min_confidence: 0.4
+      limit: 100
+
+  - id: corridor_weather
+    tool: query_weather
+    args:
+      lat: 26.7866
+      lng: 101.7916
+
+  # 确认 defect 检测模型仍在线
+  - id: cv_models
+    tool: list_installed_models
+    args: {}
+"""
+
+LINE_INSPECTION = Playbook(
+    slug="line-inspection",
+    name="巡线 · 输电线路日常巡检准备",
+    description=(
+        "空域 + 昨日检出 + 天气 + CV 模型清单。"
+        "100% 只读，可定时自动跑。默认坐标示例为二滩线路走廊。"
+    ),
+    dsl_yaml=_LINE_INSPECTION_YAML,
+    sample_inputs={},
+)
+
+
+# ------------------------------------------------------------------------- #
+# 6. Security patrol · 安防周界巡逻 (T11.3)                                 #
+# ------------------------------------------------------------------------- #
+
+_SECURITY_PATROL_YAML = """\
+# 安防 Playbook — 园区/厂区周界夜巡:
+#   1) 拉最近半小时的高置信度告警 (人员翻越/车辆滞留)
+#   2) 定位最近一次巡逻机的实时状态
+#   3) 天气检查 (大风/暴雨 → 停飞)
+#   4) 生成一次巡逻航线草稿, 走审批
+#
+# 场景假设: 夜间自动定时触发, 有人值守才审批派发.
+version: "0.1"
+name: "security-patrol"
+description: "安防 · 周界夜巡响应"
+steps:
+  # 只看高置信度告警, 避开夜间树影/动物误检
+  - id: recent_alerts
+    tool: list_detections
+    args:
+      since_minutes: 30
+      min_confidence: 0.8
+      limit: 20
+
+  - id: patrol_drone_status
+    tool: get_drone_status
+    args:
+      drone_id: "${input.drone_id}"
+
+  # 园区默认坐标: 请按驻地改
+  - id: site_weather
+    tool: query_weather
+    args:
+      lat: 30.6500
+      lng: 104.0800
+
+  # 巡逻航线 = 周界四个角
+  - id: draft_patrol
+    tool: create_mission
+    args:
+      name: "夜间周界巡逻"
+      drone_id: "${input.drone_id}"
+      waypoints:
+        - [30.6495, 104.0790, 40.0]
+        - [30.6495, 104.0810, 40.0]
+        - [30.6505, 104.0810, 40.0]
+        - [30.6505, 104.0790, 40.0]
+"""
+
+SECURITY_PATROL = Playbook(
+    slug="security-patrol",
+    name="安防 · 周界夜巡响应",
+    description=(
+        "高置信度告警 + 巡逻机状态 + 天气 + 待审批巡逻航线。"
+        "含 sensitive 工具，需值守人员审批。"
+    ),
+    dsl_yaml=_SECURITY_PATROL_YAML,
+    sample_inputs={
+        "drone_id": "00000000-0000-0000-0000-000000000000",
+    },
+)
+
+
+# ------------------------------------------------------------------------- #
 # Public catalog                                                            #
 # ------------------------------------------------------------------------- #
 
 PLAYBOOKS: dict[str, Playbook] = {
     p.slug: p for p in [
+        # -- v2.1 E2.2 seed (T11.1) --
         MORNING_INSPECTION,
         EMERGENCY_RESPONSE,
         COMPLIANCE_PATROL,
+        # -- v2.1 E2.2 domain expansion (T11.3) --
+        CROP_PROTECTION,
+        LINE_INSPECTION,
+        SECURITY_PATROL,
     ]
 }
 
