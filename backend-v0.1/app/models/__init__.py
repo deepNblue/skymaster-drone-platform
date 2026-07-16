@@ -14,6 +14,9 @@ from app.models.copilot_workflow_schedule import CopilotWorkflowSchedule
 from app.models.community_playbook import CommunityPlaybook
 from app.models.approval_template import ApprovalTemplate
 from app.models.airspace_calendar import AirspaceCalendarEntry
+from app.models.marketplace_monetization import (
+    ModelListingPrice, ModelPurchaseOrder,
+)
 from app.models.video_stream import VideoStream, VideoStreamProbe
 from app.models.model_marketplace import (
     ModelDeployment, ModelListing, ModelUsageEvent, ModelVersion,
