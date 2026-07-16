@@ -49,6 +49,74 @@ router = APIRouter(prefix="/scenes/{scene_id}/uploads", tags=["scenes-upload"])
 MAX_CHUNK_BYTES = 32 * 1024 * 1024  # 32 MiB per chunk
 
 
+# ---------------------------------------------------------------------------
+# Per-kind ingest policy · v2.1 T9.15
+# ---------------------------------------------------------------------------
+# Each SceneAsset kind gets its own upper size bound + allowed filename
+# extensions. Enforcing on `POST /uploads` (start_upload) means bad
+# clients fail fast — before any bytes hit the wire.
+
+# Absolute size caps (bytes). Chosen to cover realistic mission data
+# but bound blast radius on a runaway client.
+KIND_MAX_BYTES: dict[str, int] = {
+    "source_image":    200 * 1024 * 1024,        # 200 MiB / photo
+    "source_video":      8 * 1024 * 1024 * 1024, # 8 GiB / clip
+    "colmap_sparse":   500 * 1024 * 1024,        # 500 MiB
+    "colmap_dense":    8 * 1024 * 1024 * 1024,   # 8 GiB
+    "gsplat_ckpt":     4 * 1024 * 1024 * 1024,   # 4 GiB
+    "gsplat_ply":      4 * 1024 * 1024 * 1024,   # 4 GiB
+    "preview_thumb":     5 * 1024 * 1024,        # 5 MiB
+    "log":              50 * 1024 * 1024,        # 50 MiB
+}
+
+# Allowed lowercase filename extensions per kind. None = any extension.
+# Matching is done on the *last* dot-separated segment (case-insensitive).
+KIND_ALLOWED_EXT: dict[str, Optional[frozenset[str]]] = {
+    "source_image":  frozenset({"jpg", "jpeg", "png", "webp", "tif", "tiff"}),
+    "source_video":  frozenset({"mp4", "mov", "avi", "mkv", "webm"}),
+    "colmap_sparse": frozenset({"zip", "tar", "tar.gz", "tgz"}),
+    "colmap_dense":  frozenset({"zip", "tar", "tar.gz", "tgz", "ply"}),
+    "gsplat_ckpt":   frozenset({"ckpt", "pt", "pth", "safetensors"}),
+    "gsplat_ply":    frozenset({"ply", "splat"}),
+    "preview_thumb": frozenset({"jpg", "jpeg", "png", "webp"}),
+    "log":           None,  # allow any log extension
+}
+
+
+def _extract_ext(filename: str) -> str:
+    """Extract the lowercase extension including the trailing ``.gz`` for
+    tar.gz style compound names. Returns '' if the file has no dot."""
+    name = filename.lower().strip()
+    # Special-case double extensions.
+    for compound in ("tar.gz", "tar.bz2", "tar.xz"):
+        if name.endswith("." + compound):
+            return compound
+    if "." not in name:
+        return ""
+    return name.rsplit(".", 1)[-1]
+
+
+def _validate_kind_policy(kind: str, filename: str, size_bytes: int) -> None:
+    """Raise HTTPException if kind/filename/size combo violates policy."""
+    if kind not in SCENE_ASSET_KINDS:
+        raise HTTPException(400, f"unknown kind {kind!r}")
+    max_bytes = KIND_MAX_BYTES.get(kind)
+    if max_bytes is not None and size_bytes > max_bytes:
+        raise HTTPException(
+            413,
+            f"{kind} size {size_bytes} exceeds cap {max_bytes} bytes",
+        )
+    allowed = KIND_ALLOWED_EXT.get(kind)
+    if allowed is not None:
+        ext = _extract_ext(filename)
+        if ext not in allowed:
+            raise HTTPException(
+                415,
+                f"{kind} rejects extension .{ext!r}; "
+                f"allowed: {sorted(allowed)}",
+            )
+
+
 # ---------- schemas --------------------------------------------------------
 
 
@@ -112,11 +180,36 @@ async def start_upload(
 ) -> UploadRef:
     if body.kind not in SCENE_ASSET_KINDS:
         raise HTTPException(400, f"unknown kind {body.kind!r}")
+    # T9.15 · per-kind ingest policy (size cap + filename extension).
+    _validate_kind_policy(
+        kind=body.kind,
+        filename=body.filename,
+        size_bytes=body.size_bytes,
+    )
     scene = await _get_scene(db, scene_id, user)
     if scene.status not in ("draft", "ingesting"):
         raise HTTPException(
             409, f"scene status {scene.status!r} does not accept uploads"
         )
+
+    # T9.15 · 4DGS scenes must have exactly one source_video. Reject a
+    # second attempt so the ingest step has an unambiguous input.
+    if body.kind == "source_video":
+        scene_kind = getattr(scene, "scene_kind", "3dgs")
+        if scene_kind != "4dgs":
+            raise HTTPException(
+                409,
+                f"source_video only accepted for 4dgs scenes "
+                f"(this scene kind={scene_kind})",
+            )
+        already_have_video = any(
+            a.kind == "source_video" for a in (scene.assets or [])
+        )
+        if already_have_video:
+            raise HTTPException(
+                409,
+                "4dgs scene already has a source_video; delete it first",
+            )
 
     upload_id = uuid4().hex
     _uploads[(scene_id, upload_id)] = {
