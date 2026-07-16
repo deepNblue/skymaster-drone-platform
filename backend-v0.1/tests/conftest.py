@@ -103,6 +103,7 @@ async def client() -> AsyncClient:
             flight_approval, vision_copilot, aaas, video_stream, model_marketplace,
             scene, scene_marketplace, scene_moderation, scene_job,
             community,
+            copilot_workflow, copilot_workflow_run, copilot_workflow_schedule,
         )
         try:
             async with engine.begin() as conn:

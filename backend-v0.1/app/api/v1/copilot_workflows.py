@@ -486,6 +486,137 @@ async def api_get_playbook(
     return _pb_to_entry(pb)
 
 
+# ------------------------------------------------------------------------- #
+# Schedules (T12.1) — MUST be registered before `/{wf_id}` catch-all.       #
+# ------------------------------------------------------------------------- #
+
+
+class ScheduleCreate(BaseModel):
+    workflow_id: UUID
+    cron_expr: str = Field(min_length=1, max_length=64)
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class ScheduleUpdate(BaseModel):
+    cron_expr: str | None = Field(default=None, max_length=64)
+    inputs: dict[str, Any] | None = None
+    enabled: bool | None = None
+
+
+class ScheduleResponse(BaseModel):
+    id: UUID
+    workflow_id: UUID
+    cron_expr: str
+    inputs: dict[str, Any]
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+    next_fire_at: datetime | None
+    last_fire_at: datetime | None
+    last_fire_status: str | None
+    last_fire_run_id: UUID | None
+
+
+def _sched_to_resp(row) -> ScheduleResponse:
+    return ScheduleResponse(
+        id=row.id,
+        workflow_id=row.workflow_id,
+        cron_expr=row.cron_expr,
+        inputs=row.inputs_json or {},
+        enabled=row.enabled,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        next_fire_at=row.next_fire_at,
+        last_fire_at=row.last_fire_at,
+        last_fire_status=row.last_fire_status,
+        last_fire_run_id=row.last_fire_run_id,
+    )
+
+
+@router.post("/schedules", response_model=ScheduleResponse, status_code=201)
+async def api_create_schedule(
+    body: ScheduleCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ScheduleResponse:
+    from app.services.workflow_schedules import (
+        ScheduleError, create_schedule,
+    )
+    try:
+        row = await create_schedule(
+            db,
+            org_id=user.org_id,
+            workflow_id=body.workflow_id,
+            cron_expr=body.cron_expr,
+            inputs=body.inputs,
+            created_by=user.id,
+            enabled=body.enabled,
+        )
+    except ScheduleError as exc:
+        raise HTTPException(400, str(exc))
+    return _sched_to_resp(row)
+
+
+@router.get("/schedules", response_model=list[ScheduleResponse])
+async def api_list_schedules(
+    workflow_id: UUID | None = None,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[ScheduleResponse]:
+    from app.services.workflow_schedules import list_schedules
+    rows = await list_schedules(
+        db, org_id=user.org_id, workflow_id=workflow_id, limit=limit,
+    )
+    return [_sched_to_resp(r) for r in rows]
+
+
+@router.patch(
+    "/schedules/{schedule_id}",
+    response_model=ScheduleResponse,
+)
+async def api_update_schedule(
+    schedule_id: UUID,
+    body: ScheduleUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ScheduleResponse:
+    from app.services.workflow_schedules import (
+        ScheduleError, update_schedule,
+    )
+    try:
+        row = await update_schedule(
+            db,
+            org_id=user.org_id,
+            schedule_id=schedule_id,
+            cron_expr=body.cron_expr,
+            inputs=body.inputs,
+            enabled=body.enabled,
+        )
+    except ScheduleError as exc:
+        # "not found" vs "invalid cron" — both 400 works, but map "not
+        # found" to 404 for a cleaner client contract.
+        if "not found" in str(exc):
+            raise HTTPException(404, str(exc))
+        raise HTTPException(400, str(exc))
+    return _sched_to_resp(row)
+
+
+@router.delete("/schedules/{schedule_id}", status_code=204)
+async def api_delete_schedule(
+    schedule_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    from app.services.workflow_schedules import delete_schedule
+    ok = await delete_schedule(
+        db, org_id=user.org_id, schedule_id=schedule_id,
+    )
+    if not ok:
+        raise HTTPException(404, "schedule not found")
+
+
 @router.get("/{wf_id}", response_model=WorkflowRecordResponse)
 async def get_workflow(
     wf_id: UUID,
