@@ -1,0 +1,86 @@
+name: Backend Load Test (100 Drones)
+
+on:
+  push:
+    branches: [main, "v2.1-*", "v2.2-*"]
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-load-test.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-load-test.yml"
+  workflow_dispatch:  # 允许手动触发
+    inputs:
+      duration:
+        description: "压测时长 (秒)"
+        required: false
+        default: "30"
+      drones:
+        description: "无人机数量"
+        required: false
+        default: "100"
+
+jobs:
+  load-test-100-drones:
+    name: 100 Drones Capacity Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install minimal deps
+        run: |
+          python -m pip install --upgrade pip
+          # 压测脚本使用内联版 WebSocketManager, 只需 psutil
+          pip install psutil==7.2.2
+
+      - name: Syntax check
+        run: |
+          python -c "
+          import ast
+          for f in [
+              'backend/tests/load/mock_drone.py',
+              'backend/tests/load/mock_client.py',
+              'backend/tests/load/run_100_drones.py',
+          ]:
+              with open(f) as fp:
+                  ast.parse(fp.read())
+              print(f'✅ {f}')
+          "
+
+      - name: Run 100 drones load test (SLA gate)
+        env:
+          DURATION: ${{ github.event.inputs.duration || '30' }}
+          DRONES: ${{ github.event.inputs.drones || '100' }}
+        run: |
+          echo "▶️  跑压测: drones=$DRONES, duration=${DURATION}s, SLA P95<500ms"
+          python3 -m backend.tests.load.run_100_drones \
+            --drones "$DRONES" \
+            --duration "$DURATION" \
+            --sla-p95-ms 500 \
+            | tee load_test_result.log
+          # SLA 判定基于压测脚本自身 exit code (PASS=0 / FAIL=1)
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-result
+          path: load_test_result.log
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## 🚁 100 机压测结果" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -30 load_test_result.log >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
