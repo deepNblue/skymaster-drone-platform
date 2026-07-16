@@ -8,6 +8,7 @@ from app.models.flight_approval import (
 from app.models.vision_copilot import VisionDetection, CopilotSessionV2, CopilotTurnV2
 from app.models.community import CommunityPost, CommunityComment, CommunityReport
 from app.models.aaas import AaasClient, AaasDelivery
+from app.models.copilot_workflow import CopilotWorkflow
 from app.models.video_stream import VideoStream, VideoStreamProbe
 from app.models.model_marketplace import (
     ModelDeployment, ModelListing, ModelUsageEvent, ModelVersion,
@@ -39,6 +40,7 @@ __all__ = [
     "VisionDetection",
     "CopilotSessionV2",
     "CopilotTurnV2",
+    "CopilotWorkflow",
     "Drone",
     "FlightLog",
     "LoginEvent",
