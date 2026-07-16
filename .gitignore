@@ -69,3 +69,5 @@ secrets/
 -e 
 # Test cache
 .pytest_cache/
+gg*_result.json
+
