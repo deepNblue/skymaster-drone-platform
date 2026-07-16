@@ -1,0 +1,82 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: skymaster-worker
+  namespace: skymaster
+  labels:
+    app.kubernetes.io/name: skymaster-worker
+    app.kubernetes.io/component: gpu-worker
+spec:
+  # Workers are GPU-bound — one active job per pod.
+  # Scale horizontally by increasing replicas; the queue handles fanout.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: skymaster-worker
+  # We do NOT roll workers because a mid-training kill wastes an hour of
+  # GPU time. Prefer Recreate; workers naturally drain when queue empties.
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: skymaster-worker
+        app.kubernetes.io/component: gpu-worker
+    spec:
+      # GPU scheduling — customize per your cluster's GPU node pool
+      # nodeSelector:
+      #   cloud.provider/gpu-type: "a100-40gb"
+      # tolerations:
+      #   - key: nvidia.com/gpu
+      #     operator: Exists
+      #     effect: NoSchedule
+      containers:
+        - name: worker
+          image: skymaster/worker:v2.1.0   # override per env
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "app.worker.gpu_worker"]
+          envFrom:
+            - configMapRef:
+                name: skymaster-config
+            - secretRef:
+                name: skymaster-secret
+          env:
+            - name: WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: SKYMASTER_API_URL
+              value: "http://skymaster-api:8000"
+            - name: WORKER_KINDS
+              value: "colmap,training"     # override for export-only workers
+          resources:
+            requests:
+              cpu: "2000m"
+              memory: "8Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4000m"
+              memory: "16Gi"
+              nvidia.com/gpu: "1"
+          # Workers stream to Postgres via API; local scratch is used for
+          # colmap intermediates. Mount an emptyDir sized to your data.
+          volumeMounts:
+            - name: scratch
+              mountPath: /var/scratch
+          # No readiness probe — worker is ready as soon as it starts
+          # polling the queue. We check liveness via a heartbeat file.
+          livenessProbe:
+            exec:
+              command: ["python", "-c", "import os,time; assert time.time() - os.path.getmtime('/tmp/heartbeat') < 120"]
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: scratch
+          emptyDir:
+            sizeLimit: 50Gi
+      # Long grace period — let an in-flight training finish (up to 2h)
+      # before SIGKILL. If you can't tolerate 2h drains, tune this and
+      # use JOB_LEASE_SECONDS to auto-reclaim.
+      terminationGracePeriodSeconds: 7200

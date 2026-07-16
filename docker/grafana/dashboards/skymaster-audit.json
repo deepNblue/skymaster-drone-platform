@@ -1,0 +1,172 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 0,
+  "id": null,
+  "title": "SkyMaster · 审计与合规",
+  "uid": "skymaster-audit-v1",
+  "version": 1,
+  "schemaVersion": 38,
+  "tags": ["skymaster", "compliance", "audit"],
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "browser",
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "5min 审计量",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(skymaster_audit_events_total[5m]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 500 },
+              { "color": "red", "value": 2000 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "5min GeoFence 拦截",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(skymaster_geofence_blocks_total[5m]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "5min UOM 拒批",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(skymaster_uom_rejections_total[5m]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 5 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "在线 WS 连接",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "skymaster_ws_active_connections"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "审计事件按角色 · rate/s",
+      "description": "R7 后每条审计日志附带 actor_role；此图按 viewer/operator/admin 分组统计操作频度",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (actor_role) (rate(skymaster_audit_events_total[1m]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "stacking": { "mode": "normal" }
+          }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "right" },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "HTTP p95 延迟 (ms)",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(skymaster_http_request_duration_seconds_bucket[5m])) by (le)) * 1000"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "piechart",
+      "title": "操作分布按角色 · 1h",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (actor_role) (increase(skymaster_audit_events_total[1h]))"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "right", "showLegend": true }
+      }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "违规 Top 10 · actor_role × resource · 6h",
+      "description": "统计每对 (actor_role, resource) 的拦截/拒批总次数",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(10, sum by (actor_role, resource) (increase(skymaster_geofence_blocks_total[6h]) + increase(skymaster_uom_rejections_total[6h])))",
+          "instant": true,
+          "format": "table"
+        }
+      ]
+    }
+  ]
+}

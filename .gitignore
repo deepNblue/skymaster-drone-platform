@@ -71,3 +71,7 @@ secrets/
 .pytest_cache/
 gg*_result.json
 
+
+# generated deliverables (regeneratable from md)
+docs/*.pdf
+docs/*.html
