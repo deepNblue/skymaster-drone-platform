@@ -300,3 +300,98 @@ export async function getPlaybook(slug: string): Promise<Playbook> {
   }
   return resp.json();
 }
+
+
+// ------------------------------------------------------------------ //
+// T12.3: Schedules
+// ------------------------------------------------------------------ //
+
+export interface WorkflowSchedule {
+  id: string;
+  workflow_id: string;
+  cron_expr: string;
+  inputs: Record<string, unknown>;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  next_fire_at: string | null;
+  last_fire_at: string | null;
+  last_fire_status: string | null;
+  last_fire_run_id: string | null;
+}
+
+export async function listSchedules(opts: {
+  workflow_id?: string;
+  limit?: number;
+} = {}): Promise<WorkflowSchedule[]> {
+  const params = new URLSearchParams();
+  if (opts.workflow_id) params.set('workflow_id', opts.workflow_id);
+  if (opts.limit != null) params.set('limit', String(opts.limit));
+  const qs = params.toString();
+  const url =
+    `${baseURL}/api/v1/copilot/workflows/schedules${qs ? '?' + qs : ''}`;
+  const resp = await fetch(url, { headers: authHeaders() });
+  if (!resp.ok) {
+    throw new Error(`schedules: HTTP ${resp.status}`);
+  }
+  return resp.json();
+}
+
+export async function createSchedule(payload: {
+  workflow_id: string;
+  cron_expr: string;
+  inputs?: Record<string, unknown>;
+  enabled?: boolean;
+}): Promise<WorkflowSchedule> {
+  const resp = await fetch(
+    `${baseURL}/api/v1/copilot/workflows/schedules`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workflow_id: payload.workflow_id,
+        cron_expr: payload.cron_expr,
+        inputs: payload.inputs ?? {},
+        enabled: payload.enabled ?? true,
+      }),
+    },
+  );
+  if (!resp.ok) {
+    const detail = await resp.text();
+    throw new Error(`createSchedule: HTTP ${resp.status} — ${detail}`);
+  }
+  return resp.json();
+}
+
+export async function updateSchedule(
+  id: string,
+  patch: {
+    cron_expr?: string;
+    inputs?: Record<string, unknown>;
+    enabled?: boolean;
+  },
+): Promise<WorkflowSchedule> {
+  const resp = await fetch(
+    `${baseURL}/api/v1/copilot/workflows/schedules/${id}`,
+    {
+      method: 'PATCH',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    },
+  );
+  if (!resp.ok) {
+    const detail = await resp.text();
+    throw new Error(`updateSchedule: HTTP ${resp.status} — ${detail}`);
+  }
+  return resp.json();
+}
+
+export async function deleteSchedule(id: string): Promise<void> {
+  const resp = await fetch(
+    `${baseURL}/api/v1/copilot/workflows/schedules/${id}`,
+    { method: 'DELETE', headers: authHeaders() },
+  );
+  if (!resp.ok && resp.status !== 204) {
+    throw new Error(`deleteSchedule: HTTP ${resp.status}`);
+  }
+}

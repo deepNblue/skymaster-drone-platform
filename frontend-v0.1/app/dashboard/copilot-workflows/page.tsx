@@ -31,6 +31,7 @@
  *     retry (that would silently overwrite someone else's edits).
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import {
   Alert,
   Button,
@@ -55,6 +56,7 @@ import {
   ReloadOutlined,
   SaveOutlined,
   CheckCircleOutlined,
+  ClockCircleOutlined,
   CodeOutlined,
   BookOutlined,
 } from '@ant-design/icons';
@@ -430,9 +432,16 @@ export default function CopilotWorkflowsPage() {
         <Title level={4} style={{ margin: 0 }}>
           <CodeOutlined /> Copilot Workflow 编辑器
         </Title>
-        <Text type="secondary">
-          用 YAML 编写、保存、运行工作流。保存后可在 Copilot v2 中命名调用。
-        </Text>
+        <Space size={12} align="center" style={{ marginTop: 4 }}>
+          <Text type="secondary">
+            用 YAML 编写、保存、运行工作流。保存后可在 Copilot v2 中命名调用。
+          </Text>
+          <Link href="/dashboard/copilot-workflows/schedules">
+            <Button size="small" icon={<ClockCircleOutlined />}>
+              定时调度
+            </Button>
+          </Link>
+        </Space>
       </div>
 
       <Row gutter={12}>

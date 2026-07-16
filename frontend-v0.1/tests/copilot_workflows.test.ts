@@ -46,6 +46,10 @@ import {
   getWorkflowRunHistoryDetail,
   listPlaybooks,
   getPlaybook,
+  listSchedules,
+  createSchedule,
+  updateSchedule,
+  deleteSchedule,
 } from '../lib/copilot_workflows';
 
 // ------- helpers -------
@@ -447,6 +451,104 @@ async function runTests() {
     responder = () => new Response('nope', { status: 404 });
     await assert.rejects(
       () => getPlaybook('missing'),
+      /HTTP 404/,
+    );
+  });
+
+  // ================================================ T12.3: schedules ==
+
+  await test('listSchedules returns rows', async () => {
+    responder = () => jsonResp(200, [
+      {
+        id: 'sid1', workflow_id: 'wf1', cron_expr: '0 9 * * *',
+        inputs: {}, enabled: true,
+        created_at: '2026-07-16T00:00:00Z',
+        updated_at: '2026-07-16T00:00:00Z',
+        next_fire_at: '2026-07-17T09:00:00Z',
+        last_fire_at: null, last_fire_status: null, last_fire_run_id: null,
+      },
+    ]);
+    const rows = await listSchedules();
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].cron_expr, '0 9 * * *');
+    assert.ok(calls[0].url.endsWith('/schedules'));
+  });
+
+  await test('listSchedules with workflow_id filter', async () => {
+    responder = () => jsonResp(200, []);
+    await listSchedules({ workflow_id: 'wf-abc', limit: 50 });
+    assert.match(calls[0].url, /workflow_id=wf-abc/);
+    assert.match(calls[0].url, /limit=50/);
+  });
+
+  await test('createSchedule POSTs the payload', async () => {
+    responder = () => jsonResp(201, {
+      id: 'newid', workflow_id: 'wf1', cron_expr: '0 9 * * *',
+      inputs: { drone_id: 'x' }, enabled: true,
+      created_at: 'x', updated_at: 'x',
+      next_fire_at: 'x', last_fire_at: null,
+      last_fire_status: null, last_fire_run_id: null,
+    });
+    const row = await createSchedule({
+      workflow_id: 'wf1',
+      cron_expr: '0 9 * * *',
+      inputs: { drone_id: 'x' },
+    });
+    assert.strictEqual(row.id, 'newid');
+    assert.strictEqual(calls[0].init?.method, 'POST');
+    const body = lastReqBody() as any;
+    assert.strictEqual(body.workflow_id, 'wf1');
+    assert.strictEqual(body.cron_expr, '0 9 * * *');
+    assert.deepStrictEqual(body.inputs, { drone_id: 'x' });
+    assert.strictEqual(body.enabled, true);  // default applied
+  });
+
+  await test('createSchedule throws on 400 with detail', async () => {
+    responder = () => new Response('invalid cron_expr', { status: 400 });
+    await assert.rejects(
+      () => createSchedule({
+        workflow_id: 'wf1',
+        cron_expr: 'bad',
+      }),
+      /HTTP 400/,
+    );
+  });
+
+  await test('updateSchedule PATCHes and returns updated row', async () => {
+    responder = () => jsonResp(200, {
+      id: 'sid1', workflow_id: 'wf1', cron_expr: '0 9 * * *',
+      inputs: {}, enabled: false,
+      created_at: 'x', updated_at: 'y',
+      next_fire_at: null, last_fire_at: null,
+      last_fire_status: null, last_fire_run_id: null,
+    });
+    const row = await updateSchedule('sid1', { enabled: false });
+    assert.strictEqual(row.enabled, false);
+    assert.strictEqual(calls[0].init?.method, 'PATCH');
+    assert.match(calls[0].url, /\/schedules\/sid1$/);
+    const body = lastReqBody() as any;
+    assert.strictEqual(body.enabled, false);
+  });
+
+  await test('updateSchedule 404 throws', async () => {
+    responder = () => new Response('not found', { status: 404 });
+    await assert.rejects(
+      () => updateSchedule('missing', { enabled: true }),
+      /HTTP 404/,
+    );
+  });
+
+  await test('deleteSchedule 204 resolves', async () => {
+    responder = () => new Response(null, { status: 204 });
+    await deleteSchedule('sid1');  // should not throw
+    assert.strictEqual(calls[0].init?.method, 'DELETE');
+    assert.match(calls[0].url, /\/schedules\/sid1$/);
+  });
+
+  await test('deleteSchedule 404 throws', async () => {
+    responder = () => new Response('gone', { status: 404 });
+    await assert.rejects(
+      () => deleteSchedule('missing'),
       /HTTP 404/,
     );
   });
