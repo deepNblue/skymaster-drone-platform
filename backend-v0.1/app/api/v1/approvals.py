@@ -753,6 +753,15 @@ async def preview_routing(
 async def submit_approval(
     approval_id: UUID,
     aircraft_weight_kg: Optional[float] = Query(None),
+    force: bool = Query(
+        False,
+        description=(
+            "Bypass airspace-conflict check. When False (default) and "
+            "the requested (polygon, time window, alt) overlaps an "
+            "existing UOM / NOTAM / local slot, submission is blocked "
+            "with HTTP 409."
+        ),
+    ),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FlightApproval:
@@ -760,6 +769,47 @@ async def submit_approval(
     row = await _get_or_404(db, approval_id)
     if row.status != "draft":
         raise HTTPException(400, f"Cannot submit from status {row.status!r}")
+
+    # T7.5 — airspace calendar conflict gate. See E2.5b (0e2d3e1).
+    # Skipped if the approval is missing a time window (should not happen
+    # for a well-formed submission, but we degrade gracefully) or the
+    # caller explicitly opts out with ?force=true.
+    if not force and row.start_ts and row.end_ts and row.area_polygon:
+        try:
+            from app.services.airspace_calendar import find_conflicts
+            conflicts = await find_conflicts(
+                db,
+                org_id=user.org_id,
+                polygon=row.area_polygon,
+                start_ts=row.start_ts,
+                end_ts=row.end_ts,
+                min_alt_m=row.min_alt_m,
+                max_alt_m=row.max_alt_m,
+                exclude_ids=[row.id],
+            )
+        except Exception:  # pragma: no cover
+            conflicts = []
+        if conflicts:
+            payload = {
+                "detail": "airspace_conflict",
+                "count": len(conflicts),
+                "conflicts": [
+                    {
+                        "id": str(c.id),
+                        "source": c.source,
+                        "title": c.title,
+                        "start_ts": c.start_ts.isoformat(),
+                        "end_ts": c.end_ts.isoformat(),
+                        "external_ref": c.external_ref,
+                    }
+                    for c in conflicts
+                ],
+                "hint": (
+                    "Adjust polygon / start_ts / end_ts / altitude, "
+                    "or re-submit with ?force=true to override."
+                ),
+            }
+            raise HTTPException(status_code=409, detail=payload)
 
     # T7.0 — high-risk gate: hold submission for supervisor sign-off.
     hi_risk, hi_reason = is_high_risk(
@@ -827,6 +877,30 @@ async def submit_approval(
     row.status = "in_review"
     await db.commit()
     await db.refresh(row)
+
+    # T7.5 (cont.) — after successful submit, reserve the airspace on
+    # the local calendar so subsequent submissions see this slot as
+    # occupied. Best-effort: any error is swallowed to keep the approval
+    # flow non-blocking.
+    if row.start_ts and row.end_ts and row.area_polygon:
+        try:
+            from app.services.airspace_calendar import create_entry
+            await create_entry(
+                db,
+                org_id=user.org_id,
+                source="local",
+                title=(row.title or "flight-approval")[:255],
+                purpose=row.purpose,
+                approval_id=row.id,
+                geo_polygon=row.area_polygon,
+                start_ts=row.start_ts,
+                end_ts=row.end_ts,
+                min_alt_m=row.min_alt_m,
+                max_alt_m=row.max_alt_m,
+                priority=20,
+            )
+        except Exception:  # pragma: no cover
+            pass
     return row
 
 
