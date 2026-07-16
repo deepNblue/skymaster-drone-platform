@@ -32,7 +32,7 @@ import os
 import re
 import shlex
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence
 from uuid import UUID
@@ -127,18 +127,40 @@ def set_runner(r: CommandRunner) -> None:  # test hook
 
 @dataclass
 class ExecutorConfig:
-    docker_image_colmap: str = os.getenv(
-        "SKYMASTER_COLMAP_IMAGE", "colmap/colmap:latest"
+    # Use ``default_factory`` so each ExecutorConfig() re-reads the
+    # environment. Bare ``= os.getenv(...)`` would freeze the value at
+    # class-definition time — which broke pytest-driven env overrides
+    # (e.g. SKYMASTER_SCENES_WORKDIR pointing to a tmp_path in e2e tests).
+    docker_image_colmap: str = field(
+        default_factory=lambda: os.getenv(
+            "SKYMASTER_COLMAP_IMAGE", "colmap/colmap:latest"
+        )
     )
-    docker_image_gsplat: str = os.getenv(
-        "SKYMASTER_GSPLAT_IMAGE", "nerfstudio/nerfstudio:latest"
+    docker_image_gsplat: str = field(
+        default_factory=lambda: os.getenv(
+            "SKYMASTER_GSPLAT_IMAGE", "nerfstudio/nerfstudio:latest"
+        )
     )
-    scenes_workdir: str = os.getenv(
-        "SKYMASTER_SCENES_WORKDIR", "/tmp/skymaster-scenes"
+    scenes_workdir: str = field(
+        default_factory=lambda: os.getenv(
+            "SKYMASTER_SCENES_WORKDIR", "/tmp/skymaster-scenes"
+        )
     )
-    colmap_timeout: float = float(os.getenv("SKYMASTER_COLMAP_TIMEOUT", "7200"))  # 2h
-    gsplat_timeout: float = float(os.getenv("SKYMASTER_GSPLAT_TIMEOUT", "14400"))  # 4h
-    use_docker: bool = os.getenv("SKYMASTER_USE_DOCKER", "1") in ("1", "true", "TRUE")
+    colmap_timeout: float = field(
+        default_factory=lambda: float(
+            os.getenv("SKYMASTER_COLMAP_TIMEOUT", "7200")
+        )
+    )
+    gsplat_timeout: float = field(
+        default_factory=lambda: float(
+            os.getenv("SKYMASTER_GSPLAT_TIMEOUT", "14400")
+        )
+    )
+    use_docker: bool = field(
+        default_factory=lambda: os.getenv(
+            "SKYMASTER_USE_DOCKER", "1"
+        ) in ("1", "true", "TRUE")
+    )
 
 
 def _scene_workdir(cfg: ExecutorConfig, scene_id: UUID) -> Path:
