@@ -126,11 +126,17 @@ async def client() -> AsyncClient:
 
             for t in Base.metadata.sorted_tables:
                 for col in t.columns:
-                    if col.server_default is None:
-                        continue
-                    txt = _sd_text(col.server_default)
-                    if "gen_random_uuid" in txt or "::jsonb" in txt or "now()" in txt:
-                        col.server_default = None
+                    if col.server_default is not None:
+                        txt = _sd_text(col.server_default)
+                        if "gen_random_uuid" in txt or "::jsonb" in txt or "now()" in txt:
+                            col.server_default = None
+                    # onupdate=text("now()") also unsupported on SQLite;
+                    # strip so pipeline tests can UPDATE without hitting
+                    # "no such function: now".
+                    if col.onupdate is not None:
+                        onup_txt = _sd_text(col.onupdate)
+                        if "now()" in onup_txt:
+                            col.onupdate = None
             for t in Base.metadata.sorted_tables:
                 try:
                     async with engine.begin() as conn:
