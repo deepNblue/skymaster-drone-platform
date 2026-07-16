@@ -32,6 +32,7 @@ import {
   ArrowLeftOutlined,
   ClockCircleOutlined,
   DeleteOutlined,
+  PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
@@ -39,6 +40,7 @@ import {
 import {
   createSchedule,
   deleteSchedule,
+  fireScheduleNow,
   listSchedules,
   listWorkflows,
   updateSchedule,
@@ -189,6 +191,29 @@ export default function SchedulesPage() {
     [reload],
   );
 
+  const [firing, setFiring] = useState<string | null>(null);
+  const doFireNow = useCallback(
+    async (id: string) => {
+      setFiring(id);
+      try {
+        const result = await fireScheduleNow(id);
+        if (result.status === 'ok') {
+          message.success(
+            `触发成功 (${result.duration_ms ?? '?'} ms)`,
+          );
+        } else {
+          message.warning(`触发完成但状态: ${result.status}`);
+        }
+        await reload();
+      } catch (e: any) {
+        message.error(`触发失败: ${e?.message ?? e}`);
+      } finally {
+        setFiring(null);
+      }
+    },
+    [reload],
+  );
+
   const columns = [
     {
       title: 'Workflow',
@@ -224,6 +249,14 @@ export default function SchedulesPage() {
       key: 'ops',
       render: (_: unknown, row: WorkflowSchedule) => (
         <Space size={4}>
+          <Button
+            size="small"
+            icon={<PlayCircleOutlined />}
+            loading={firing === row.id}
+            onClick={() => void doFireNow(row.id)}
+          >
+            立即触发
+          </Button>
           <Switch
             size="small"
             checked={row.enabled}

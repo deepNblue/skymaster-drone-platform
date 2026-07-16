@@ -395,3 +395,22 @@ export async function deleteSchedule(id: string): Promise<void> {
     throw new Error(`deleteSchedule: HTTP ${resp.status}`);
   }
 }
+
+export interface FireNowResult {
+  status: string;
+  run_id: string | null;
+  duration_ms: number | null;
+}
+
+/** T12.4: trigger a schedule immediately without touching cron cadence. */
+export async function fireScheduleNow(id: string): Promise<FireNowResult> {
+  const resp = await fetch(
+    `${baseURL}/api/v1/copilot/workflows/schedules/${id}/fire-now`,
+    { method: 'POST', headers: authHeaders() },
+  );
+  if (!resp.ok) {
+    const detail = await resp.text();
+    throw new Error(`fireScheduleNow: HTTP ${resp.status} — ${detail}`);
+  }
+  return resp.json();
+}

@@ -617,6 +617,73 @@ async def api_delete_schedule(
         raise HTTPException(404, "schedule not found")
 
 
+class FireNowResponse(BaseModel):
+    """T12.4: manual fire-now — bypasses cron but reuses the scheduler's
+    execute+audit path, so the resulting run row is indistinguishable
+    from an automatic one (trace.scheduled=True, trace.fired_manually=True).
+    """
+    status: str
+    run_id: UUID | None
+    duration_ms: int | None = None
+
+
+@router.post(
+    "/schedules/{schedule_id}/fire-now",
+    response_model=FireNowResponse,
+)
+async def api_fire_schedule_now(
+    schedule_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> FireNowResponse:
+    """Trigger a schedule's workflow immediately.
+
+    * Does NOT touch next_fire_at — the cron cadence is unaffected.
+    * Does record last_fire_at/status/run_id (with a "manual" marker in
+      the audit trace_json) so the UI shows "last fire" correctly.
+    * Requires the schedule to still exist in the caller's org.
+    * Fire-now works even if enabled=False — the user is asking for
+      a one-shot regardless of scheduler state.
+    """
+    from datetime import datetime, timezone
+    from app.services.workflow_scheduler import (
+        _execute_and_record, _finalize,
+    )
+    from app.services.workflow_schedules import get_schedule
+
+    sched = await get_schedule(
+        db, org_id=user.org_id, schedule_id=schedule_id,
+    )
+    if sched is None:
+        raise HTTPException(404, "schedule not found")
+
+    now = datetime.now(timezone.utc)
+    status, run_id = await _execute_and_record(db, sched)
+    await _finalize(
+        db, sched, fired_at=now, status=status, run_id=run_id,
+    )
+
+    duration_ms: int | None = None
+    if run_id is not None:
+        from app.models.copilot_workflow_run import CopilotWorkflowRun
+        q = select(CopilotWorkflowRun).where(
+            CopilotWorkflowRun.id == run_id,
+        )
+        run_row = (await db.execute(q)).scalar_one_or_none()
+        if run_row is not None:
+            duration_ms = run_row.duration_ms
+            # Add manual marker to the trace.
+            trace = dict(run_row.trace_json or {})
+            trace["fired_manually"] = True
+            trace["fired_by"] = str(user.id)
+            run_row.trace_json = trace
+            await db.commit()
+
+    return FireNowResponse(
+        status=status, run_id=run_id, duration_ms=duration_ms,
+    )
+
+
 @router.get("/{wf_id}", response_model=WorkflowRecordResponse)
 async def get_workflow(
     wf_id: UUID,

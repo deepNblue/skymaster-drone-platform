@@ -50,6 +50,7 @@ import {
   createSchedule,
   updateSchedule,
   deleteSchedule,
+  fireScheduleNow,
 } from '../lib/copilot_workflows';
 
 // ------- helpers -------
@@ -549,6 +550,28 @@ async function runTests() {
     responder = () => new Response('gone', { status: 404 });
     await assert.rejects(
       () => deleteSchedule('missing'),
+      /HTTP 404/,
+    );
+  });
+
+  await test('fireScheduleNow posts and returns run info', async () => {
+    responder = () => jsonResp(200, {
+      status: 'ok',
+      run_id: 'run-xyz',
+      duration_ms: 42,
+    });
+    const result = await fireScheduleNow('sid1');
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(result.run_id, 'run-xyz');
+    assert.strictEqual(result.duration_ms, 42);
+    assert.strictEqual(calls[0].init?.method, 'POST');
+    assert.match(calls[0].url, /\/schedules\/sid1\/fire-now$/);
+  });
+
+  await test('fireScheduleNow throws with detail on 404', async () => {
+    responder = () => new Response('schedule not found', { status: 404 });
+    await assert.rejects(
+      () => fireScheduleNow('missing'),
       /HTTP 404/,
     );
   });
