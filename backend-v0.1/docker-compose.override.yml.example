@@ -1,0 +1,17 @@
+# Copy this file to docker-compose.override.yml for local development.
+# It mounts the source tree into the api and mavlink-connector containers
+# so uvicorn --reload picks up code changes without rebuilding the image.
+
+services:
+  api:
+    volumes:
+      - ./:/app
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  mavlink-connector:
+    volumes:
+      - ./:/app
+    command: python -m app.services.mavlink_connector

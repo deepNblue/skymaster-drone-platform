@@ -1,0 +1,60 @@
+# GPU worker image — v2.1 T1.5.
+#
+# Adds COLMAP + nerfstudio (gsplat backend) on top of the base backend image.
+# Deploys to nodes tagged `gpu=true` in K8s; the base image runs the REST
+# API on plain CPU nodes.
+#
+# Base image assumption: we build FROM nvidia/cuda so drivers match the
+# host GPU. On production we tune this to match the exact CUDA version
+# the cluster provides (currently CUDA 12.4).
+
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04 AS gpu-worker
+
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3.11 \
+        python3.11-dev \
+        python3-pip \
+        git \
+        cmake \
+        ninja-build \
+        libboost-all-dev \
+        libeigen3-dev \
+        libsuitesparse-dev \
+        libfreeimage-dev \
+        libglew-dev \
+        libgoogle-glog-dev \
+        libgflags-dev \
+        libatlas-base-dev \
+        libcgal-dev \
+        libceres-dev \
+        libqt5opengl5-dev \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# COLMAP from apt (Ubuntu 22.04 ships v3.7; if we need newer, add PPA).
+# For 2026-06-onwards we pin the apt version via image tag rebuilds.
+RUN apt-get update && apt-get install -y --no-install-recommends colmap && \
+    rm -rf /var/lib/apt/lists/*
+
+# Python deps for gsplat trainer
+RUN python3.11 -m pip install --upgrade pip && \
+    python3.11 -m pip install --no-cache-dir \
+        torch==2.4.0 \
+        torchvision==0.19.0 \
+        --index-url https://download.pytorch.org/whl/cu124
+
+# nerfstudio (splatfacto) — takes care of gsplat + viewer deps
+RUN python3.11 -m pip install --no-cache-dir nerfstudio==1.1.5
+
+# Non-root user (matches backend image)
+RUN groupadd -g 1000 skymaster && \
+    useradd -u 1000 -g 1000 -m -s /bin/bash skymaster
+
+USER skymaster
+WORKDIR /home/skymaster
+
+# Sanity check
+RUN colmap -h > /dev/null && ns-train --help > /dev/null
+
+CMD ["/bin/bash"]
