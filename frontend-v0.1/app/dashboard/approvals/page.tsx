@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import {
   Card, Table, Button, Tag, Space, Typography, Modal, Form, Input,
   InputNumber, DatePicker, Select, message, Alert, Descriptions, Timeline,
@@ -10,6 +11,7 @@ import {
   PlusOutlined, SendOutlined, CheckCircleOutlined, CloseCircleOutlined,
   RocketOutlined, ClockCircleOutlined, StopOutlined, ReloadOutlined,
   SafetyCertificateOutlined, FilePdfOutlined, QrcodeOutlined,
+  FileAddOutlined,
   RobotOutlined, ThunderboltOutlined, DownloadOutlined,
 } from '@ant-design/icons';
 import dayjs, { type Dayjs } from 'dayjs';
@@ -281,6 +283,9 @@ export default function ApprovalsPage() {
             </Text>
           </div>
           <Space>
+            <Link href="/dashboard/approval-templates">
+              <Button icon={<FileAddOutlined />}>模板</Button>
+            </Link>
             <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
             <Button
               icon={<SendOutlined />}
