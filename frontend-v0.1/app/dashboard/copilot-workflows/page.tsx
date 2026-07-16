@@ -56,12 +56,16 @@ import {
   SaveOutlined,
   CheckCircleOutlined,
   CodeOutlined,
+  BookOutlined,
 } from '@ant-design/icons';
 
 import {
   createWorkflow,
   deleteWorkflow,
+  getPlaybook,
+  listPlaybooks,
   listWorkflows,
+  Playbook,
   runInlineWorkflow,
   runStoredWorkflow,
   updateWorkflow,
@@ -120,6 +124,11 @@ export default function CopilotWorkflowsPage() {
   const [run, setRun] = useState<WorkflowRun | null>(null);
   const [busy, setBusy] = useState<'save' | 'validate' | 'run' | null>(null);
 
+  // -- Playbook picker modal (T11.1) --
+  const [pbOpen, setPbOpen] = useState(false);
+  const [pbList, setPbList] = useState<Playbook[]>([]);
+  const [pbLoading, setPbLoading] = useState(false);
+
   const isNew = selectedId === null;
 
   // Fetch list on mount + provide a manual reload button.
@@ -157,6 +166,40 @@ export default function CopilotWorkflowsPage() {
     setYamlText(SAMPLE_DSL);
     setValidation(null);
     setRun(null);
+  };
+
+  // ------- Playbook picker (T11.1) -------
+  const openPlaybookPicker = useCallback(async () => {
+    setPbOpen(true);
+    if (pbList.length > 0) return; // cached
+    setPbLoading(true);
+    try {
+      const items = await listPlaybooks();
+      setPbList(items);
+    } catch (e: any) {
+      message.error(`Playbook 加载失败: ${e?.message ?? e}`);
+    } finally {
+      setPbLoading(false);
+    }
+  }, [pbList.length]);
+
+  /** Fork one playbook into a fresh unsaved draft. User can then edit + Save
+   *  to persist under their org — never modifies the seed row. */
+  const forkPlaybook = (pb: Playbook) => {
+    setSelectedId(null);
+    setCurrentVersion(0);
+    setName(`我的-${pb.slug}`);
+    setDescription(`来自 playbook: ${pb.name}`);
+    setYamlText(pb.dsl_yaml);
+    setInputsJson(
+      Object.keys(pb.sample_inputs).length > 0
+        ? JSON.stringify(pb.sample_inputs, null, 2)
+        : '{}'
+    );
+    setValidation(null);
+    setRun(null);
+    setPbOpen(false);
+    message.success(`已加载 playbook: ${pb.name}，请编辑后保存`);
   };
 
   const parseInputs = useCallback((): Record<string, unknown> | null => {
@@ -391,6 +434,13 @@ export default function CopilotWorkflowsPage() {
                 />
                 <Button
                   size="small"
+                  icon={<BookOutlined />}
+                  onClick={openPlaybookPicker}
+                >
+                  Playbook
+                </Button>
+                <Button
+                  size="small"
                   type="primary"
                   icon={<PlusOutlined />}
                   onClick={newDraft}
@@ -552,6 +602,57 @@ export default function CopilotWorkflowsPage() {
           </Card>
         </Col>
       </Row>
+
+      {/* ============ Playbook picker modal (T11.1) ============ */}
+      <Modal
+        title="选择官方 Playbook"
+        open={pbOpen}
+        onCancel={() => setPbOpen(false)}
+        footer={null}
+        width={680}
+      >
+        {pbLoading ? (
+          <Text type="secondary">加载中…</Text>
+        ) : pbList.length === 0 ? (
+          <Empty description="暂无 playbook" />
+        ) : (
+          <List
+            size="small"
+            dataSource={pbList}
+            renderItem={(pb) => (
+              <List.Item
+                actions={[
+                  <Button
+                    key="fork"
+                    type="primary"
+                    size="small"
+                    onClick={() => forkPlaybook(pb)}
+                  >
+                    加载到编辑器
+                  </Button>,
+                ]}
+              >
+                <List.Item.Meta
+                  title={<Text strong>{pb.name}</Text>}
+                  description={
+                    <div>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {pb.description}
+                      </Text>
+                      <div style={{ marginTop: 4 }}>
+                        <Tag>{pb.slug}</Tag>
+                        {Object.keys(pb.sample_inputs).length > 0 && (
+                          <Tag color="blue">带示例输入</Tag>
+                        )}
+                      </div>
+                    </div>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        )}
+      </Modal>
     </div>
   );
 }

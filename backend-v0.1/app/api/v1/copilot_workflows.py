@@ -40,6 +40,11 @@ from app.deps import get_current_user
 from app.models.copilot_workflow import CopilotWorkflow
 from app.models.copilot_workflow_run import CopilotWorkflowRun
 from app.models.user import User
+from app.services.copilot_playbooks import (
+    Playbook,
+    get_playbook,
+    list_playbooks,
+)
 from app.services.tool_registry import ToolContext, build_default_registry
 from app.services.workflow_dsl import (
     WorkflowError,
@@ -415,6 +420,49 @@ async def get_run_history_detail(
         started_at=row.started_at,
         trace=row.trace_json or {},
     )
+
+
+# ------------------------------------------------------------------------- #
+# Playbooks (T11.1) — MUST be registered before `/{wf_id}` catch-all.       #
+# ------------------------------------------------------------------------- #
+
+
+class PlaybookEntry(BaseModel):
+    slug: str
+    name: str
+    description: str
+    dsl_yaml: str
+    sample_inputs: dict[str, Any] = Field(default_factory=dict)
+
+
+def _pb_to_entry(pb: Playbook) -> PlaybookEntry:
+    return PlaybookEntry(
+        slug=pb.slug,
+        name=pb.name,
+        description=pb.description,
+        dsl_yaml=pb.dsl_yaml,
+        sample_inputs=pb.sample_inputs,
+    )
+
+
+@router.get("/playbooks", response_model=list[PlaybookEntry])
+async def api_list_playbooks(
+    _: User = Depends(get_current_user),
+) -> list[PlaybookEntry]:
+    """List all official playbooks. Auth-gated (no anonymous access to
+    seed content) but org-agnostic — every user sees the same catalog."""
+    return [_pb_to_entry(pb) for pb in list_playbooks()]
+
+
+@router.get("/playbooks/{slug}", response_model=PlaybookEntry)
+async def api_get_playbook(
+    slug: str,
+    _: User = Depends(get_current_user),
+) -> PlaybookEntry:
+    pb = get_playbook(slug)
+    if pb is None:
+        raise HTTPException(404, "playbook not found")
+    return _pb_to_entry(pb)
 
 
 @router.get("/{wf_id}", response_model=WorkflowRecordResponse)

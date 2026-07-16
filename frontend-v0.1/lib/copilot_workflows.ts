@@ -259,3 +259,37 @@ export async function runStoredWorkflow(
   }
   return resp.json();
 }
+
+
+// ============================================================ playbooks ===
+
+/** Official read-only seed workflow. Users fork with "Save as...". */
+export interface Playbook {
+  slug: string;
+  name: string;
+  description: string;
+  dsl_yaml: string;
+  sample_inputs: Record<string, unknown>;
+}
+
+export async function listPlaybooks(): Promise<Playbook[]> {
+  const resp = await fetch(
+    `${baseURL}/api/v1/copilot/workflows/playbooks`,
+    { headers: authHeaders() },
+  );
+  if (!resp.ok) {
+    throw new Error(`playbooks: HTTP ${resp.status}`);
+  }
+  return resp.json();
+}
+
+export async function getPlaybook(slug: string): Promise<Playbook> {
+  const resp = await fetch(
+    `${baseURL}/api/v1/copilot/workflows/playbooks/${slug}`,
+    { headers: authHeaders() },
+  );
+  if (!resp.ok) {
+    throw new Error(`playbook: HTTP ${resp.status}`);
+  }
+  return resp.json();
+}

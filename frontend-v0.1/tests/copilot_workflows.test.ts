@@ -44,6 +44,8 @@ import {
   runStoredWorkflow,
   listWorkflowRunHistory,
   getWorkflowRunHistoryDetail,
+  listPlaybooks,
+  getPlaybook,
 } from '../lib/copilot_workflows';
 
 // ------- helpers -------
@@ -373,6 +375,62 @@ async function runTests() {
     responder = () => new Response('not found', { status: 404 });
     await assert.rejects(
       () => getWorkflowRunHistoryDetail('nope'),
+      /HTTP 404/,
+    );
+  });
+
+  // ================================================= playbooks (T11.1) ===
+
+  console.log('--- playbooks ---');
+
+  await test('listPlaybooks returns the seed catalog', async () => {
+    responder = () => jsonResp(200, [
+      {
+        slug: 'morning-inspection',
+        name: '早查',
+        description: '...',
+        dsl_yaml: '# ok\nversion: "0.1"\nname: x\nsteps: []',
+        sample_inputs: {},
+      },
+    ]);
+    const rows = await listPlaybooks();
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].slug, 'morning-inspection');
+    assert.ok(
+      calls[0].url.endsWith('/api/v1/copilot/workflows/playbooks'),
+    );
+  });
+
+  await test('listPlaybooks throws on 500', async () => {
+    responder = () => new Response('boom', { status: 500 });
+    await assert.rejects(
+      () => listPlaybooks(),
+      /HTTP 500/,
+    );
+  });
+
+  await test('getPlaybook returns DSL for a specific slug', async () => {
+    responder = () => jsonResp(200, {
+      slug: 'compliance-patrol',
+      name: '合规巡查',
+      description: '...',
+      dsl_yaml: '# doc\nversion: "0.1"\nname: y\nsteps: []',
+      sample_inputs: {},
+    });
+    const pb = await getPlaybook('compliance-patrol');
+    assert.strictEqual(pb.slug, 'compliance-patrol');
+    assert.match(pb.dsl_yaml, /^# doc/);
+    assert.ok(
+      calls[0].url.endsWith(
+        '/api/v1/copilot/workflows/playbooks/compliance-patrol',
+      ),
+    );
+  });
+
+  await test('getPlaybook throws on 404', async () => {
+    responder = () => new Response('nope', { status: 404 });
+    await assert.rejects(
+      () => getPlaybook('missing'),
       /HTTP 404/,
     );
   });
