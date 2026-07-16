@@ -137,6 +137,9 @@ class ExecResult:
     n_points: Optional[int] = None
     n_gaussians: Optional[int] = None
     psnr_train: Optional[float] = None
+    # v2.1 D2.1 · 4DGS extras. Populated only when scene_kind='4dgs'.
+    n_frames: Optional[int] = None
+    psnr_temporal: Optional[float] = None
 
 
 class Executor(ABC):

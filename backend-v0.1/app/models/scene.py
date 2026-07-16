@@ -107,6 +107,18 @@ class Scene(Base):
     n_gaussians: Mapped[int | None] = mapped_column(Integer)
     psnr_train: Mapped[float | None] = mapped_column(Float)
 
+    # v2.1 D2.1 · 4DGS temporal support
+    # scene_kind ∈ {'3dgs', '4dgs'}: single-frame reconstruction vs
+    # multi-frame temporal Gaussian splatting. Defaults to '3dgs' so
+    # existing rows keep behaving identically.
+    scene_kind: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default=text("'3dgs'"), index=True
+    )
+    # 4dgs only: number of temporal frames captured; NULL for 3dgs.
+    n_frames: Mapped[int | None] = mapped_column(Integer)
+    # 4dgs only: PSNR on held-out temporal frames.
+    psnr_temporal: Mapped[float | None] = mapped_column(Float)
+
     meta: Mapped[dict[str, Any] | None] = mapped_column(
         "metadata", JSONB, server_default=text("'{}'::jsonb")
     )

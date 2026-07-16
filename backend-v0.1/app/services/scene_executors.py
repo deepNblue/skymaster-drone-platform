@@ -263,6 +263,87 @@ def build_gsplat_cmd(cfg: ExecutorConfig, workdir: Path) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# 4DGS · temporal Gaussian splatting (v2.1 D2.1)
+# ---------------------------------------------------------------------------
+
+
+def build_gsplat4d_cmd(
+    cfg: ExecutorConfig, workdir: Path, *, n_frames: int
+) -> list[str]:
+    """Build 4DGS training command.
+
+    Uses the ``splatfacto-4d`` variant (Gaussian-Splatting-in-Time /
+    Deformable-3DGS-style) — trains N per-frame Gaussian buckets sharing a
+    common canonical bank + deformation MLP.
+
+    Data layout expected under ``workdir``:
+        workdir/
+          frames/
+            0000/images/*.jpg
+            0001/images/*.jpg
+            ...
+
+    We pass ``--n-frames N`` so the trainer allocates temporal buckets.
+    """
+    inner = [
+        "ns-train", "splatfacto-4d",
+        "--data", "/work" if cfg.use_docker else str(workdir),
+        "--output-dir",
+        "/work/gsplat4d_out" if cfg.use_docker else str(workdir / "gsplat4d_out"),
+        "--max-num-iterations", "40000",
+        "--n-frames", str(n_frames),
+    ]
+    if cfg.use_docker:
+        return [
+            "docker", "run", "--rm", "--gpus", "all",
+            "-v", f"{workdir}:/work",
+            cfg.docker_image_gsplat,
+            *inner,
+        ]
+    return inner
+
+
+# 4dgs trainer prints two PSNR figures at end:
+#   "psnr: 27.4"  (spatial, same as 3dgs)
+#   "psnr_temporal: 24.1"  (held-out temporal frames)
+_GSPLAT4D_PSNR_TEMPORAL = re.compile(
+    r"psnr_temporal\s*[:=]\s*([\d.]+)", re.IGNORECASE
+)
+_GSPLAT4D_N_FRAMES = re.compile(
+    r"n_frames\s*[:=]\s*(\d+)", re.IGNORECASE
+)
+
+
+def parse_gsplat4d_stats(stdout: str) -> dict:
+    """Extract n_gaussians, psnr, psnr_temporal, n_frames from 4dgs stdout.
+
+    Reuses ``parse_gsplat_stats`` for the shared spatial fields and adds
+    the two temporal-only fields.
+    """
+    base = parse_gsplat_stats(stdout)
+
+    psnr_temporal: Optional[float] = None
+    n_frames: Optional[int] = None
+
+    m = _GSPLAT4D_PSNR_TEMPORAL.search(stdout)
+    if m:
+        try:
+            psnr_temporal = float(m.group(1))
+        except ValueError:
+            pass
+
+    m = _GSPLAT4D_N_FRAMES.search(stdout)
+    if m:
+        n_frames = int(m.group(1))
+
+    return {
+        **base,
+        "psnr_temporal": psnr_temporal,
+        "n_frames": n_frames,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Executors
 # ---------------------------------------------------------------------------
 
@@ -320,6 +401,56 @@ class GsplatExecutor(Executor):
         )
 
 
+class Gsplat4DExecutor(Executor):
+    """4DGS temporal Gaussian splatting executor (v2.1 D2.1).
+
+    Reuses ``ColmapExecutor`` for the SfM stage (each frame's images
+    still need calibration), then runs ``splatfacto-4d`` for temporal
+    reconstruction. The number of frames is read from ``Scene.n_frames``
+    at dispatch time; the executor exposes ``set_frame_count`` so the
+    pipeline can inject it without re-instantiating.
+    """
+
+    def __init__(self, cfg: Optional[ExecutorConfig] = None):
+        self.cfg = cfg or ExecutorConfig()
+        self._colmap = ColmapExecutor(cfg=self.cfg)
+        self._n_frames: int = 1  # sensible default; caller should override
+
+    def set_frame_count(self, n_frames: int) -> None:
+        if n_frames < 1:
+            raise ValueError(f"n_frames must be ≥1, got {n_frames}")
+        self._n_frames = n_frames
+
+    async def run_colmap(self, scene_id: UUID) -> ExecResult:
+        return await self._colmap.run_colmap(scene_id)
+
+    async def run_training(self, scene_id: UUID) -> ExecResult:
+        workdir = _scene_workdir(self.cfg, scene_id)
+        cmd = build_gsplat4d_cmd(self.cfg, workdir, n_frames=self._n_frames)
+        log.info(
+            "gsplat4d.train scene=%s n_frames=%d cmd=%s",
+            scene_id,
+            self._n_frames,
+            shlex.join(cmd),
+        )
+        r = await get_runner().run(
+            cmd, cwd=str(workdir), timeout=self.cfg.gsplat_timeout
+        )
+        if not r.ok:
+            return ExecResult(
+                ok=False,
+                error=f"gsplat4d exit={r.exit_code}: {r.stderr[-800:]}",
+            )
+        stats = parse_gsplat4d_stats(r.stdout + "\n" + r.stderr)
+        return ExecResult(
+            ok=True,
+            n_gaussians=stats.get("n_gaussians"),
+            psnr_train=stats.get("psnr"),
+            n_frames=stats.get("n_frames") or self._n_frames,
+            psnr_temporal=stats.get("psnr_temporal"),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Factory (env-driven default)
 # ---------------------------------------------------------------------------
@@ -328,12 +459,14 @@ class GsplatExecutor(Executor):
 def make_default_executor() -> Executor:
     """Read env and build the appropriate executor.
 
-    SKYMASTER_EXECUTOR = noop | colmap | gsplat (default noop for dev)
+    SKYMASTER_EXECUTOR = noop | colmap | gsplat | gsplat4d (default noop for dev)
     """
     mode = os.getenv("SKYMASTER_EXECUTOR", "noop").lower()
     if mode == "colmap":
         return ColmapExecutor()
     if mode == "gsplat":
         return GsplatExecutor()
+    if mode in ("gsplat4d", "4dgs"):
+        return Gsplat4DExecutor()
     from app.services.scene_pipeline import NoOpExecutor
     return NoOpExecutor()
