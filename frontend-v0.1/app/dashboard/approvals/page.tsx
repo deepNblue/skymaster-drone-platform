@@ -11,7 +11,7 @@ import {
   PlusOutlined, SendOutlined, CheckCircleOutlined, CloseCircleOutlined,
   RocketOutlined, ClockCircleOutlined, StopOutlined, ReloadOutlined,
   SafetyCertificateOutlined, FilePdfOutlined, QrcodeOutlined,
-  FileAddOutlined,
+  FileAddOutlined, RadarChartOutlined,
   RobotOutlined, ThunderboltOutlined, DownloadOutlined,
 } from '@ant-design/icons';
 import dayjs, { type Dayjs } from 'dayjs';
@@ -285,6 +285,9 @@ export default function ApprovalsPage() {
           <Space>
             <Link href="/dashboard/approval-templates">
               <Button icon={<FileAddOutlined />}>模板</Button>
+            </Link>
+            <Link href="/dashboard/airspace-calendar">
+              <Button icon={<RadarChartOutlined />}>空域日历</Button>
             </Link>
             <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
             <Button
