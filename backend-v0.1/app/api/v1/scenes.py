@@ -355,7 +355,7 @@ async def scene_progress_sse(
 
     TERMINAL = {"ready", "failed", "archived"}
 
-    async def _snapshot(scene_row: Scene) -> dict:
+    def _snapshot(scene_row: Scene) -> dict:
         return {
             "scene_id": str(scene_row.id),
             "status": scene_row.status,
@@ -371,31 +371,51 @@ async def scene_progress_sse(
             "ts": datetime.now(timezone.utc).isoformat(),
         }
 
+    # v2.1: pub/sub via AsyncBroadcaster instead of per-request DB poll.
+    # scene_job.py publishes state transitions to topic scene:<id>.
+    from app.services.async_broadcaster import get_broadcaster
+    broadcaster = get_broadcaster()
+    topic = f"scene:{scene_id}"
+
+    # Fallback safety: max 30 min per SSE connection (proxy-friendly).
+    MAX_DURATION_SEC = 60 * 30
+
     async def _gen():
-        # Deliberate open-ended loop: at most 30 min or until terminal.
-        MAX_TICKS = 60 * 30
-        for _ in range(MAX_TICKS):
-            # Re-query on every tick rather than refresh() — the request
-            # scoped Session may have been closed by the time SSE
-            # streams, but we can grab a fresh row via the injected db.
-            fresh = (
-                await db.execute(
-                    select(Scene).where(Scene.id == scene_id)
-                )
-            ).scalar_one_or_none()
-            if fresh is None:
-                yield "event: gone\ndata: {}\n\n"
-                return
-            snap = await _snapshot(fresh)
-            yield f"data: {json.dumps(snap)}\n\n"
-            if fresh.status in TERMINAL:
-                yield "event: done\ndata: {}\n\n"
-                return
-            # Heartbeat comment doubles as a keep-alive for proxies.
-            yield ": keepalive\n\n"
-            await asyncio.sleep(1.0)
-        # 30-min ceiling reached without hitting terminal.
-        yield "event: timeout\ndata: {}\n\n"
+        import time as _time
+        deadline = _time.monotonic() + MAX_DURATION_SEC
+
+        # Compute current snapshot as SSE initial frame.
+        initial = _snapshot(scene)
+
+        try:
+            async for event in broadcaster.subscribe(
+                topic,
+                initial=initial,
+                heartbeat_interval=15.0,
+            ):
+                if _time.monotonic() >= deadline:
+                    yield "event: timeout\ndata: {}\n\n"
+                    return
+
+                if event is None:
+                    # Heartbeat comment doubles as keep-alive for proxies.
+                    yield ": keepalive\n\n"
+                    continue
+
+                # Special event kinds
+                kind = event.get("_event")
+                if kind == "gone":
+                    yield "event: gone\ndata: {}\n\n"
+                    return
+
+                yield f"data: {json.dumps(event)}\n\n"
+
+                if event.get("status") in TERMINAL:
+                    yield "event: done\ndata: {}\n\n"
+                    return
+        except asyncio.CancelledError:
+            # Client disconnected — subscribe generator's finally cleans up.
+            raise
 
     return StreamingResponse(
         _gen(),
