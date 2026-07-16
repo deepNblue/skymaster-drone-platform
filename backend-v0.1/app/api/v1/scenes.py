@@ -15,6 +15,7 @@ Endpoints
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 from uuid import UUID
 
@@ -254,10 +255,62 @@ async def start_ingest(
     _authz_write(scene, user)
     try:
         await sp.transition(db, scene, "ingesting")
-        # In v2.1 T1 the upload endpoint handles assets; for now we complete
-        # ingest immediately based on n_source_images >= 1
-        if scene.n_source_images < 1:
-            await sp.transition(db, scene, "failed", error_msg="no source images uploaded")
+        # v2.1 D2.2 · 4DGS branch: if this is a 4dgs scene, look up its
+        # source_video asset and run FrameExtractor to produce the
+        # bucketed frames/ layout consumed by Gsplat4DExecutor.
+        is_4dgs = getattr(scene, "scene_kind", "3dgs") == "4dgs"
+        if is_4dgs:
+            n_frames = getattr(scene, "n_frames", None)
+            video_assets = [
+                a for a in (scene.assets or [])
+                if a.kind == "source_video"
+            ]
+            if not n_frames or n_frames < 2:
+                await sp.transition(
+                    db, scene, "failed",
+                    error_msg=(
+                        f"4dgs scene requires n_frames>=2, got {n_frames!r}"
+                    ),
+                )
+            elif not video_assets:
+                await sp.transition(
+                    db, scene, "failed",
+                    error_msg="4dgs scene requires a source_video asset",
+                )
+            else:
+                video = video_assets[0]
+                from app.services.frame_extractor import (
+                    FrameExtractionConfig, FrameExtractor,
+                )
+                from app.services.scene_executors import (
+                    ExecutorConfig, _scene_workdir,
+                )
+                workdir = _scene_workdir(ExecutorConfig(), scene.id)
+                workdir.mkdir(parents=True, exist_ok=True)
+                frames_dir = workdir / "frames"
+
+                extractor = FrameExtractor(
+                    cfg=FrameExtractionConfig(overwrite=True)
+                )
+                result = await extractor.extract(
+                    video=Path(video.storage_path),
+                    frames_dir=frames_dir,
+                    n_frames=n_frames,
+                )
+                if not result.ok:
+                    await sp.transition(
+                        db, scene, "failed",
+                        error_msg=(result.error or "frame extract failed")[:500],
+                    )
+                else:
+                    scene.n_source_images = result.n_frames
+                    await sp.transition(db, scene, "ingested")
+        # 3DGS legacy branch: n_source_images-based sanity gate.
+        elif scene.n_source_images < 1:
+            await sp.transition(
+                db, scene, "failed",
+                error_msg="no source images uploaded",
+            )
         else:
             await sp.transition(db, scene, "ingested")
     except sp.InvalidTransition as e:
