@@ -11,6 +11,7 @@ from app.models.aaas import AaasClient, AaasDelivery
 from app.models.copilot_workflow import CopilotWorkflow
 from app.models.copilot_workflow_run import CopilotWorkflowRun
 from app.models.copilot_workflow_schedule import CopilotWorkflowSchedule
+from app.models.community_playbook import CommunityPlaybook
 from app.models.video_stream import VideoStream, VideoStreamProbe
 from app.models.model_marketplace import (
     ModelDeployment, ModelListing, ModelUsageEvent, ModelVersion,

@@ -58,6 +58,17 @@ def _sqlite_inet(element, compiler, **kw):
 def _sqlite_ts(element, compiler, **kw):
     return "TIMESTAMP"
 
+
+# T11.2: community_playbooks uses postgres ARRAY(String) for tags —
+# lower to plain TEXT on SQLite. The service layer stores/reads as
+# JSON string when running on SQLite.
+from sqlalchemy.dialects.postgresql import ARRAY as _PgARRAY  # noqa: E402
+
+
+@compiles(_PgARRAY, "sqlite")
+def _sqlite_array(element, compiler, **kw):
+    return "TEXT"
+
 import pytest_asyncio  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 
@@ -104,6 +115,7 @@ async def client() -> AsyncClient:
             scene, scene_marketplace, scene_moderation, scene_job,
             community,
             copilot_workflow, copilot_workflow_run, copilot_workflow_schedule,
+            community_playbook,
         )
         try:
             async with engine.begin() as conn:
@@ -141,7 +153,7 @@ async def client() -> AsyncClient:
                                 # ColumnDefault; use ScalarElementColumnDefault
                                 from sqlalchemy import ColumnDefault
                                 col.default = ColumnDefault(lambda: _uuid.uuid4())
-                        elif "::jsonb" in txt or "now()" in txt:
+                        elif "::jsonb" in txt or "now()" in txt.lower() or "array[" in txt.lower():
                             col.server_default = None
                     if col.onupdate is not None:
                         onup_txt = _sd_text(col.onupdate)
