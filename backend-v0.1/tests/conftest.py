@@ -124,15 +124,24 @@ async def client() -> AsyncClient:
                     return arg
                 return ""
 
+            import uuid as _uuid
+
             for t in Base.metadata.sorted_tables:
                 for col in t.columns:
                     if col.server_default is not None:
                         txt = _sd_text(col.server_default)
-                        if "gen_random_uuid" in txt or "::jsonb" in txt or "now()" in txt:
+                        if "gen_random_uuid" in txt:
+                            # SQLite can't gen_random_uuid — provide a
+                            # Python-side default so INSERTs succeed.
                             col.server_default = None
-                    # onupdate=text("now()") also unsupported on SQLite;
-                    # strip so pipeline tests can UPDATE without hitting
-                    # "no such function: now".
+                            if col.default is None:
+                                col.default = None  # placeholder
+                                # SQLAlchemy Column.default expects a
+                                # ColumnDefault; use ScalarElementColumnDefault
+                                from sqlalchemy import ColumnDefault
+                                col.default = ColumnDefault(lambda: _uuid.uuid4())
+                        elif "::jsonb" in txt or "now()" in txt:
+                            col.server_default = None
                     if col.onupdate is not None:
                         onup_txt = _sd_text(col.onupdate)
                         if "now()" in onup_txt:

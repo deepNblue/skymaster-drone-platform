@@ -107,6 +107,11 @@ async def transition(
                 "n_points": scene.n_points,
                 "n_gaussians": scene.n_gaussians,
                 "psnr_train": scene.psnr_train,
+                # v2.1 D2.1 · 4DGS-aware SSE payload. Falls back to None
+                # for legacy scenes without these columns.
+                "scene_kind": getattr(scene, "scene_kind", "3dgs"),
+                "n_frames": getattr(scene, "n_frames", None),
+                "psnr_temporal": getattr(scene, "psnr_temporal", None),
                 "error_msg": scene.error_msg,
                 "updated_at": (
                     scene.updated_at.isoformat()
@@ -193,13 +198,35 @@ async def start_colmap(db: AsyncSession, scene: Scene) -> Scene:
 
 async def start_training(db: AsyncSession, scene: Scene) -> Scene:
     await transition(db, scene, "training")
-    res = await get_executor().run_training(scene.id)
+    executor = get_executor()
+
+    # v2.1 D2.1 · 4DGS: inject the scene's n_frames into the executor
+    # if it supports it (Gsplat4DExecutor). We use duck-typing rather
+    # than isinstance to keep this file import-cycle-free.
+    n_frames = getattr(scene, "n_frames", None)
+    if n_frames is not None and hasattr(executor, "set_frame_count"):
+        try:
+            executor.set_frame_count(int(n_frames))
+        except (TypeError, ValueError):
+            return await transition(
+                db,
+                scene,
+                "failed",
+                error_msg=f"invalid n_frames for 4dgs scene: {n_frames!r}",
+            )
+
+    res = await executor.run_training(scene.id)
     if not res.ok:
         return await transition(db, scene, "failed", error_msg=res.error or "training failed")
     if res.n_gaussians is not None:
         scene.n_gaussians = res.n_gaussians
     if res.psnr_train is not None:
         scene.psnr_train = res.psnr_train
+    # v2.1 D2.1 · 4DGS: persist temporal metrics if the executor filled them.
+    if getattr(res, "n_frames", None) is not None and hasattr(scene, "n_frames"):
+        scene.n_frames = res.n_frames
+    if getattr(res, "psnr_temporal", None) is not None and hasattr(scene, "psnr_temporal"):
+        scene.psnr_temporal = res.psnr_temporal
     return await transition(db, scene, "ready")
 
 

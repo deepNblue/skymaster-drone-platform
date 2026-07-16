@@ -58,6 +58,10 @@ class SceneOut(BaseModel):
     n_points: Optional[int]
     n_gaussians: Optional[int]
     psnr_train: Optional[float]
+    # v2.1 D2.1 · 4DGS
+    scene_kind: str = "3dgs"
+    n_frames: Optional[int] = None
+    psnr_temporal: Optional[float] = None
     mission_id: Optional[UUID]
     assets: list[SceneAssetOut] = []
 
@@ -70,6 +74,12 @@ class SceneCreate(BaseModel):
     description: Optional[str] = None
     coord_system: Optional[str] = Field(None, max_length=40)
     mission_id: Optional[UUID] = None
+    # v2.1 D2.1 · scene_kind decides which executor branch handles this
+    # scene. Defaults to '3dgs' so existing clients keep working.
+    scene_kind: str = Field("3dgs", pattern=r"^(3dgs|4dgs)$")
+    # For 4dgs only: number of temporal frames.
+    # Ignored (or must equal 1) for 3dgs.
+    n_frames: Optional[int] = Field(None, ge=1, le=512)
 
 
 class SceneUpdate(BaseModel):
@@ -87,6 +97,23 @@ class ScenesList(BaseModel):
 
 
 def _to_out(scene: Scene) -> SceneOut:
+    # New scenes may not have their `assets` relationship loaded — under
+    # async SQLAlchemy accessing an unloaded relationship raises
+    # MissingGreenlet. Use `inspect()` to check the loader state so we
+    # only iterate assets when they are already loaded (e.g. after
+    # selectinload). Otherwise return an empty list.
+    from sqlalchemy import inspect as _sa_inspect
+
+    try:
+        state = _sa_inspect(scene)
+        assets_loaded = "assets" not in state.unloaded
+    except Exception:  # pragma: no cover
+        assets_loaded = False
+
+    assets_out: list[SceneAssetOut] = []
+    if assets_loaded and scene.assets:
+        assets_out = [SceneAssetOut.model_validate(a) for a in scene.assets]
+
     return SceneOut(
         id=scene.id,
         name=scene.name,
@@ -98,11 +125,11 @@ def _to_out(scene: Scene) -> SceneOut:
         n_points=scene.n_points,
         n_gaussians=scene.n_gaussians,
         psnr_train=scene.psnr_train,
+        scene_kind=getattr(scene, "scene_kind", "3dgs"),
+        n_frames=getattr(scene, "n_frames", None),
+        psnr_temporal=getattr(scene, "psnr_temporal", None),
         mission_id=scene.mission_id,
-        assets=[
-            SceneAssetOut.model_validate(a)
-            for a in (scene.assets or [])
-        ],
+        assets=assets_out,
     )
 
 
@@ -125,7 +152,19 @@ async def create_scene(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> SceneOut:
-    scene = Scene(
+    # v2.1 D2.1 · 4DGS-aware validation
+    if body.scene_kind == "4dgs":
+        if body.n_frames is None or body.n_frames < 2:
+            raise HTTPException(
+                400, "4dgs scenes require n_frames >= 2"
+            )
+    elif body.scene_kind == "3dgs":
+        if body.n_frames is not None and body.n_frames != 1:
+            raise HTTPException(
+                400, "3dgs scenes must have n_frames unset or =1"
+            )
+
+    scene_kwargs = dict(
         name=body.name,
         description=body.description,
         coord_system=body.coord_system,
@@ -134,6 +173,15 @@ async def create_scene(
         owner_user_id=user.id,
         status="draft",
     )
+    # scene_kind/n_frames are new columns — check attribute existence
+    # before assigning so we don't break in the (unlikely) case the
+    # alembic migration hasn't been applied yet.
+    if hasattr(Scene, "scene_kind"):
+        scene_kwargs["scene_kind"] = body.scene_kind
+    if hasattr(Scene, "n_frames"):
+        scene_kwargs["n_frames"] = body.n_frames
+
+    scene = Scene(**scene_kwargs)
     db.add(scene)
     await db.commit()
     await db.refresh(scene)
@@ -363,6 +411,9 @@ async def scene_progress_sse(
             "n_points": scene_row.n_points,
             "n_gaussians": scene_row.n_gaussians,
             "psnr_train": scene_row.psnr_train,
+            "scene_kind": getattr(scene_row, "scene_kind", "3dgs"),
+            "n_frames": getattr(scene_row, "n_frames", None),
+            "psnr_temporal": getattr(scene_row, "psnr_temporal", None),
             "error_msg": scene_row.error_msg,
             "updated_at": (
                 scene_row.updated_at.isoformat()
