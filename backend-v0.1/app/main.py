@@ -32,6 +32,15 @@ def _mavlink_enabled() -> bool:
     )
 
 
+def _copilot_scheduler_enabled() -> bool:
+    """Copilot workflow scheduler daemon (T12.2). Defaults to OFF so
+    tests and dev environments don't get surprise fires; opt-in via
+    START_COPILOT_SCHEDULER=1 in production."""
+    return os.getenv("START_COPILOT_SCHEDULER", "false").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 def _trajectory_enabled() -> bool:
     return os.getenv("ENABLE_TRAJECTORY_STORE", "true").strip().lower() in (
         "1", "true", "yes", "on",
@@ -154,6 +163,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         logger.info("RevokedToken cleanup task started (every 6h)")
 
+    # T12.2: Copilot workflow scheduler background task.
+    scheduler_task: asyncio.Task | None = None
+    scheduler_stop: asyncio.Event | None = None
+    if _copilot_scheduler_enabled():
+        from app.db import AsyncSessionLocal
+        from app.services.workflow_scheduler import (
+            TICK_INTERVAL_SECONDS, run_forever,
+        )
+
+        interval = float(
+            os.getenv("COPILOT_SCHEDULER_INTERVAL_S", str(TICK_INTERVAL_SECONDS)),
+        )
+        scheduler_stop = asyncio.Event()
+        scheduler_task = asyncio.create_task(
+            run_forever(
+                AsyncSessionLocal,
+                interval_seconds=interval,
+                stop_event=scheduler_stop,
+            ),
+            name="copilot-workflow-scheduler",
+        )
+        logger.info(
+            "Copilot workflow scheduler started (interval=%.1fs)", interval,
+        )
+
     try:
         yield
     finally:
@@ -163,6 +197,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await revoke_cleanup_task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+        # T12.2: stop scheduler cleanly (event > cancel).
+        if scheduler_task is not None:
+            if scheduler_stop is not None:
+                scheduler_stop.set()
+            try:
+                await asyncio.wait_for(scheduler_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):  # noqa: BLE001
+                scheduler_task.cancel()
         for inst, task in (
             (consumer_instance, consumer_task),
             (mavlink_instance, mavlink_task),
