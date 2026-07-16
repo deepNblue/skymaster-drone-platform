@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1 import admin, aaas, approvals, audit_export, auth, auth_2fa, auth_events, auth_reset, auth_sessions, auth_sso, ciio, community, compliance, copilot, crypto_sm2, drones, geofence, health, missions, model_marketplace as mm_router, officers, preflight, remoteid, scene_job, scene_marketplace, scene_moderation, scenes, scenes_artifacts, scenes_upload, sim, streams, trajectory, uom, video_streams, vision_copilot as vc_router, websocket
+from app.api.v1 import admin, aaas, approvals, audit_export, auth, auth_2fa, auth_events, auth_reset, auth_sessions, auth_sso, ciio, community, compliance, copilot, copilot_workflows, crypto_sm2, drones, geofence, health, missions, model_marketplace as mm_router, officers, preflight, remoteid, scene_job, scene_marketplace, scene_moderation, scenes, scenes_artifacts, scenes_upload, sim, streams, trajectory, uom, video_streams, vision_copilot as vc_router, websocket
 from app.services.metrics import router as metrics_router
 
 api_router = APIRouter()
@@ -35,6 +35,7 @@ api_router.include_router(missions.router)
 api_router.include_router(streams.router)
 api_router.include_router(websocket.router)
 api_router.include_router(copilot.router)
+api_router.include_router(copilot_workflows.router)
 api_router.include_router(sim.router)
 api_router.include_router(trajectory.router)
 api_router.include_router(uom.router)
