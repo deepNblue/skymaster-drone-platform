@@ -38,6 +38,16 @@ python3 -m backend.tests.load.api_server --drones 100 --duration 90 --port 8766
 python3 -m backend.tests.load.run_100_drones_api --duration 30 --users 50 --port 8766
 ```
 
+## 场景 D · 数据库入库压测
+
+```bash
+# 一键跑三策略对比 (single vs batch vs batch_wal)
+python3 -m backend.tests.load.run_100_drones_db --duration 30
+
+# 单一策略
+python3 -m backend.tests.load.run_100_drones_db --duration 30 --mode batch_wal
+```
+
 ## 参数说明
 
 | 参数 | 默认 | 说明 |
@@ -71,6 +81,7 @@ python3 -m backend.tests.load.run_100_drones_api --duration 30 --users 50 --port
 - **场景 A 应用层**：P95 = 0.54 ms（富余 926×）
 - **场景 B 真 WS 网络栈**：P95 = 4.98 ms（富余 100×）
 - **场景 C REST API**：4 端点 P95 全部 < 36 ms（富余 5.6-11.6×），错误率 0%
+- **场景 D 数据库入库**：batch+WAL 单批 P95 = 7.4 ms（富余 13×），100% 数据完整
 - ✅ 100 机 SLA 严重富余
 
 完整报告见 `docs/CAPACITY_100_DRONES.md`
