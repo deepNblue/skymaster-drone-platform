@@ -21,6 +21,10 @@
 
 SkyMaster是一个开源的企业级无人机管控平台，支持多品牌无人机的统一管理、实时监控、任务规划和集群控制。
 
+> 📖 **仓库结构说明**：仓库当前存在 `backend/` (v1.x legacy) 和 `backend-v0.1/` (v2.x 主线) 两组目录。新开发请到 `-v0.1/` 目录，详见 [`docs/REPO_STRUCTURE.md`](docs/REPO_STRUCTURE.md)。
+>
+> 🎯 **v2.0 已交付**：见 [`docs/V2.0_DELIVERY_REPORT.md`](docs/V2.0_DELIVERY_REPORT.md) · **v2.1 已启动**：见 [`docs/V2.1_KICKOFF.md`](docs/V2.1_KICKOFF.md)
+
 ### 核心特性
 
 ✈️ **多平台兼容**
