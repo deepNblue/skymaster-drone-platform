@@ -74,6 +74,15 @@ export default function ApprovalsPage() {
   const [detail, setDetail] = useState<FlightApproval | null>(null);
   const [selected, setSelected] = useState<React.Key[]>([]);
   const [batching, setBatching] = useState(false);
+  // T7.5 — airspace conflict modal (409 from submit).
+  const [conflictState, setConflictState] = useState<{
+    approvalId: string;
+    count: number;
+    conflicts: Array<{
+      id: string; source: string; title: string;
+      start_ts: string; end_ts: string; external_ref: string | null;
+    }>;
+  } | null>(null);
   const [signatures, setSignatures] = useState<ApprovalSignature[]>([]);
   const [signBusy, setSignBusy] = useState(false);
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
@@ -159,14 +168,35 @@ export default function ApprovalsPage() {
     }
   };
 
-  const onSubmit = async (id: string) => {
+  const onSubmit = async (id: string, opts: { force?: boolean } = {}) => {
     try {
-      await submitApproval(id);
-      message.success('已提交至相关主管部门');
+      await submitApproval(id, undefined, opts);
+      message.success(
+        opts.force ? '已强制提交（绕过空域冲突）' : '已提交至相关主管部门',
+      );
+      setConflictState(null);
       load();
       if (detailId === id) loadDetail(id);
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '提交失败');
+      // Airspace conflict (E2.5c): backend returns 409 with structured
+      // detail. Pop a modal offering to force through.
+      const status = e?.response?.status;
+      const d = e?.response?.data?.detail;
+      if (
+        status === 409 &&
+        d && typeof d === 'object' &&
+        d.detail === 'airspace_conflict'
+      ) {
+        setConflictState({
+          approvalId: id,
+          count: d.count,
+          conflicts: d.conflicts ?? [],
+        });
+        return;
+      }
+      message.error(
+        typeof d === 'string' ? d : (e?.message ?? '提交失败'),
+      );
     }
   };
 
@@ -991,6 +1021,68 @@ export default function ApprovalsPage() {
               }))}
             />
           </Space>
+        )}
+      </Modal>
+
+      {/* T7.5 Airspace conflict modal — shown when POST /submit returns 409. */}
+      <Modal
+        title="⚠️ 空域冲突"
+        open={conflictState !== null}
+        onCancel={() => setConflictState(null)}
+        footer={[
+          <Button key="cancel" onClick={() => setConflictState(null)}>
+            取消 / 修改时段
+          </Button>,
+          <Button
+            key="force"
+            danger
+            type="primary"
+            onClick={() => {
+              if (conflictState) {
+                void onSubmit(conflictState.approvalId, { force: true });
+              }
+            }}
+          >
+            强制提交 (force=true)
+          </Button>,
+        ]}
+        width={640}
+      >
+        {conflictState && (
+          <div>
+            <Alert
+              type="warning"
+              showIcon
+              message={`发现 ${conflictState.count} 条空域占用冲突`}
+              description="建议先调整起止时间 / 高度带 / polygon, 或与占用方协调; 应急/演习必须飞则可强制提交."
+            />
+            <div style={{ marginTop: 12 }}>
+              {conflictState.conflicts.map((c) => (
+                <Descriptions
+                  key={c.id} size="small" bordered column={2}
+                  style={{ marginBottom: 8 }}
+                >
+                  <Descriptions.Item label="来源">
+                    <Tag color={
+                      c.source === 'uom' ? 'red' :
+                      c.source === 'notam' ? 'orange' :
+                      c.source === 'local' ? 'blue' : 'purple'
+                    }>{c.source.toUpperCase()}</Tag>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="标题">{c.title}</Descriptions.Item>
+                  <Descriptions.Item label="起" span={1}>
+                    {new Date(c.start_ts).toLocaleString('zh-CN')}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="止" span={1}>
+                    {new Date(c.end_ts).toLocaleString('zh-CN')}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="外部编号" span={2}>
+                    {c.external_ref ?? '—'}
+                  </Descriptions.Item>
+                </Descriptions>
+              ))}
+            </div>
+          </div>
         )}
       </Modal>
     </div>

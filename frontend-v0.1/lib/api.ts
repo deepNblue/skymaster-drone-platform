@@ -768,11 +768,18 @@ export async function previewRouting(id: string, weight?: number) {
   return data.authorities as Authority[];
 }
 
-export async function submitApproval(id: string, weight?: number) {
+export async function submitApproval(
+  id: string,
+  weight?: number,
+  opts: { force?: boolean } = {},
+) {
+  const params: Record<string, any> = {};
+  if (weight != null) params.aircraft_weight_kg = weight;
+  if (opts.force) params.force = true;
   const { data } = await api.post(
     `/api/v1/approvals/${id}/submit`,
     null,
-    { params: weight != null ? { aircraft_weight_kg: weight } : {} },
+    { params },
   );
   return data as FlightApproval;
 }
