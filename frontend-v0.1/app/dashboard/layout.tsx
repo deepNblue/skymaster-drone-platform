@@ -45,6 +45,7 @@ const menuItems = [
   { key: '/dashboard/copilot', icon: <RobotOutlined />, label: 'Copilot' },
   { key: '/dashboard/copilot-v2', icon: <ExperimentOutlined />, label: 'Copilot v2' },
   { key: '/dashboard/copilot-workflows', icon: <CodeOutlined />, label: 'Workflow 编辑器' },
+  { key: '/dashboard/copilot-history', icon: <HistoryOutlined />, label: 'Workflow 历史' },
   { key: '/dashboard/copilot-traces', icon: <HistoryOutlined />, label: 'Copilot 追踪' },
   { key: '/dashboard/crypto-sm2', icon: <SafetyCertificateOutlined />, label: 'SM2 签名' },
   { key: '/dashboard/audit-export', icon: <FileTextOutlined />, label: '审计导出' },

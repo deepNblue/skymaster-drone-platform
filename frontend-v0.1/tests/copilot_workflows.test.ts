@@ -42,6 +42,8 @@ import {
   updateWorkflow,
   deleteWorkflow,
   runStoredWorkflow,
+  listWorkflowRunHistory,
+  getWorkflowRunHistoryDetail,
 } from '../lib/copilot_workflows';
 
 // ------- helpers -------
@@ -302,6 +304,77 @@ async function runTests() {
     assert.ok(calls[0].url.endsWith('/api/v1/copilot/workflows/the-id/run'));
     const body = lastReqBody() as Record<string, unknown>;
     assert.deepStrictEqual(body.inputs, { k: 1 });
+  });
+
+  // ================================================ history endpoints ===
+
+  console.log('--- history ---');
+
+  await test('listWorkflowRunHistory sends limit + workflow_id params', async () => {
+    responder = () => jsonResp(200, [
+      {
+        id: 'r1', workflow_id: 'w1', workflow_name: 'wf',
+        status: 'ok', duration_ms: 10, error: null,
+        started_at: '2026-07-16T00:00:00Z',
+      },
+    ]);
+    const rows = await listWorkflowRunHistory({
+      limit: 25, workflow_id: 'w1',
+    });
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].status, 'ok');
+    assert.match(calls[0].url, /\/history\?/);
+    assert.match(calls[0].url, /limit=25/);
+    assert.match(calls[0].url, /workflow_id=w1/);
+  });
+
+  await test('listWorkflowRunHistory with no opts omits querystring', async () => {
+    responder = () => jsonResp(200, []);
+    await listWorkflowRunHistory();
+    // Should end exactly with /history (no trailing ?).
+    assert.ok(
+      calls[0].url.endsWith('/api/v1/copilot/workflows/history'),
+      `unexpected url: ${calls[0].url}`,
+    );
+  });
+
+  await test('listWorkflowRunHistory throws on 4xx', async () => {
+    responder = () => new Response('nope', { status: 403 });
+    await assert.rejects(
+      () => listWorkflowRunHistory(),
+      /HTTP 403/,
+    );
+  });
+
+  await test('getWorkflowRunHistoryDetail returns trace with steps', async () => {
+    responder = () => jsonResp(200, {
+      id: 'r1', workflow_id: null, workflow_name: 'inline',
+      status: 'ok', duration_ms: 10, error: null,
+      started_at: '2026-07-16T00:00:00Z',
+      trace: {
+        workflow_name: 'inline', status: 'ok',
+        duration_ms: 10, error: null,
+        steps: [{
+          id: 'a', tool: 'echo', status: 'ok',
+          resolved_args: { msg: 'hi' }, result: { echo: 'hi' },
+          error: null, duration_ms: 2,
+        }],
+      },
+    });
+    const detail = await getWorkflowRunHistoryDetail('r1');
+    assert.strictEqual(detail.id, 'r1');
+    assert.strictEqual(detail.workflow_id, null);
+    const trace = detail.trace as any;
+    assert.strictEqual(trace.steps[0].tool, 'echo');
+    assert.ok(calls[0].url.endsWith('/api/v1/copilot/workflows/history/r1'));
+  });
+
+  await test('getWorkflowRunHistoryDetail throws on 404', async () => {
+    responder = () => new Response('not found', { status: 404 });
+    await assert.rejects(
+      () => getWorkflowRunHistoryDetail('nope'),
+      /HTTP 404/,
+    );
   });
 
   // ============================================================== summary =

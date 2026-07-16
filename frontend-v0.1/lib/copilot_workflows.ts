@@ -193,6 +193,54 @@ export async function deleteWorkflow(id: string): Promise<void> {
   }
 }
 
+// ========================================================= run history ===
+
+/** Row in the /history list. Trace omitted for payload economy. */
+export interface WorkflowRunHistoryEntry {
+  id: string;
+  workflow_id: string | null;
+  workflow_name: string;
+  status: 'ok' | 'failed';
+  duration_ms: number;
+  error: string | null;
+  started_at: string;
+}
+
+/** /history/{id} detail — carries the full RunResponse under `trace`. */
+export interface WorkflowRunHistoryDetail extends WorkflowRunHistoryEntry {
+  trace: WorkflowRun | Record<string, unknown>;
+}
+
+export async function listWorkflowRunHistory(opts: {
+  limit?: number;
+  workflow_id?: string;
+} = {}): Promise<WorkflowRunHistoryEntry[]> {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set('limit', String(opts.limit));
+  if (opts.workflow_id) params.set('workflow_id', opts.workflow_id);
+  const qs = params.toString();
+  const url =
+    `${baseURL}/api/v1/copilot/workflows/history${qs ? '?' + qs : ''}`;
+  const resp = await fetch(url, { headers: authHeaders() });
+  if (!resp.ok) {
+    throw new Error(`history: HTTP ${resp.status}`);
+  }
+  return resp.json();
+}
+
+export async function getWorkflowRunHistoryDetail(
+  runId: string,
+): Promise<WorkflowRunHistoryDetail> {
+  const resp = await fetch(
+    `${baseURL}/api/v1/copilot/workflows/history/${runId}`,
+    { headers: authHeaders() },
+  );
+  if (!resp.ok) {
+    throw new Error(`history detail: HTTP ${resp.status}`);
+  }
+  return resp.json();
+}
+
 export async function runStoredWorkflow(
   id: string,
   inputs: Record<string, unknown> = {},
