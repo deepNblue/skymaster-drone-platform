@@ -1,0 +1,24 @@
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: skymaster-api
+  namespace: skymaster
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: skymaster-api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: skymaster-worker
+  namespace: skymaster
+spec:
+  # For GPU workers we accept losing a pod during voluntary disruption
+  # (e.g. node drain) — 1 is a soft floor, tune to your fleet size.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: skymaster-worker

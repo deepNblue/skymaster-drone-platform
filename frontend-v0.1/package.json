@@ -1,0 +1,39 @@
+{
+  "name": "skymaster-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "copy-cesium": "node scripts/copy-cesium.js",
+    "prebuild": "node scripts/copy-cesium.js",
+    "predev": "node scripts/copy-cesium.js"
+  },
+  "dependencies": {
+    "@ant-design/icons": "5.4.0",
+    "@types/three": "^0.160.0",
+    "@zip.js/zip.js": "^2.7.60",
+    "antd": "5.20.0",
+    "axios": "1.7.2",
+    "cesium": "^1.119.0",
+    "dayjs": "1.11.11",
+    "hls.js": "^1.5.0",
+    "next": "14.2.5",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "resium": "^1.19.0-beta.1",
+    "three": "^0.160.0",
+    "zustand": "4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.10",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "copy-webpack-plugin": "^12.0.2",
+    "eslint": "8.57.0",
+    "eslint-config-next": "14.2.5",
+    "typescript": "5.5.3"
+  }
+}

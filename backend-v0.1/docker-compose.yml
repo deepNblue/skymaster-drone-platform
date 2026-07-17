@@ -1,0 +1,112 @@
+services:
+  postgres:
+    image: timescale/timescaledb:2.13.1-pg15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sm
+      POSTGRES_PASSWORD: sm
+      POSTGRES_DB: skymaster
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sm -d skymaster"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio12345
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    restart: unless-stopped
+    environment:
+      MTX_API: "yes"
+      MTX_APIADDRESS: ":9997"
+      MTX_LOGLEVEL: "info"
+    ports:
+      - "8554:8554"   # RTSP
+      - "8888:8888"   # HLS
+      - "1935:1935"   # RTMP
+      - "9997:9997"   # Control API
+    volumes:
+      - ./config/mediamtx.yml:/mediamtx.yml:ro
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      mediamtx:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      MEDIAMTX_API_URL: "http://mediamtx:9997"
+      MEDIAMTX_HLS_URL_BASE: "http://mediamtx:8888"
+      MEDIAMTX_RTSP_URL_BASE: "rtsp://mediamtx:8554"
+    ports:
+      - "8000:8000"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  mavlink-connector:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - redis
+    network_mode: host
+    env_file:
+      - .env
+    command: python -m app.services.mavlink_connector
+
+  telemetry-consumer:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    command: python -m app.services.telemetry_consumer
+
+volumes:
+  pg_data:
+  redis_data:
+  minio_data:

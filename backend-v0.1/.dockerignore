@@ -1,0 +1,43 @@
+# SkyMaster Backend — build ignore.
+# Keep image small + reproducible.
+
+# Dev artifacts
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Docs & tests (kept out of runtime image; unit tests live outside)
+tests/
+docs/
+*.md
+
+# Local data
+data/
+storage/
+scenes/
+uploads/
+logs/
+*.log
+
+# Secrets / creds
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Git
+.git/
+.gitignore

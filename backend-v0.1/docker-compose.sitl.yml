@@ -1,0 +1,21 @@
+# PX4 SITL overlay for SkyMaster v0.1 dev/test.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.sitl.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.sitl.yml down
+#
+# The SITL container publishes a MAVLink UDP stream on 14550 which the
+# mavlink-connector service (network_mode: host) can subscribe to via the
+# default MAVLINK_ENDPOINT=udpin:0.0.0.0:14550.
+
+services:
+  px4-sitl:
+    image: jonasvautherin/px4-gazebo-headless:latest
+    restart: unless-stopped
+    environment:
+      PX4_HOME_LAT: "39.9042"
+      PX4_HOME_LON: "116.4074"
+      PX4_HOME_ALT: "50"
+    ports:
+      - "14550:14550/udp"
+      - "14556:14556/udp"

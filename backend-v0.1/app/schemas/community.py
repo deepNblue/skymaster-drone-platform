@@ -1,0 +1,103 @@
+"""Community pydantic schemas — request/response DTOs."""
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class PostCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    body: str = Field(..., min_length=1, max_length=20000)
+    tags: list[str] | None = Field(default_factory=list)
+
+
+class PostOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    tenant_id: UUID | None
+    author_id: UUID | None
+    title: str
+    body: str
+    tags: list[str] | None
+    moderation_status: str
+    moderation_reason: str | None
+    pinned: bool
+    view_count: int
+    like_count: int
+    comment_count: int
+    created_at: datetime
+    updated_at: datetime
+    # T6.17 — populated by the API layer, not the ORM row. Signals
+    # whether the current caller has liked this post so the frontend
+    # can render the correct heart state without a second round trip.
+    liked_by_me: bool = False
+
+
+class PostList(BaseModel):
+    total: int
+    items: list[PostOut]
+
+
+class CommentCreate(BaseModel):
+    body: str = Field(..., min_length=1, max_length=4000)
+    parent_id: UUID | None = None
+
+
+class CommentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    post_id: UUID
+    parent_id: UUID | None
+    author_id: UUID | None
+    body: str
+    moderation_status: str
+    like_count: int
+    created_at: datetime
+
+
+class ModerationDecision(BaseModel):
+    action: Literal["approve", "reject", "archive"]
+    reason: str | None = None
+
+
+REPORT_REASONS = (
+    "spam", "harassment", "misinformation", "illegal", "porn",
+    "violence", "off_topic", "other",
+)
+
+
+class ReportCreate(BaseModel):
+    reason: Literal[
+        "spam", "harassment", "misinformation", "illegal", "porn",
+        "violence", "off_topic", "other",
+    ]
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class ReportOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    post_id: UUID
+    reporter_id: UUID | None
+    reason: str
+    note: str | None
+    status: str
+    resolved_by: UUID | None
+    resolved_at: datetime | None
+    created_at: datetime
+
+
+class ReportResolve(BaseModel):
+    action: Literal["resolve", "dismiss"]
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class ReportList(BaseModel):
+    total: int
+    items: list[ReportOut]

@@ -1,0 +1,32 @@
+# Multi-stage Dockerfile for skymaster-worker
+# Base: nvidia/cuda 12 with cudnn — swap tag if your cluster's driver is
+# older/newer. Falls back gracefully to CPU if GPU isn't present.
+FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04 AS runtime
+
+# Common OS bits + Python 3.11
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3-pip \
+    build-essential git curl ca-certificates \
+    ffmpeg libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 100
+
+# COLMAP — install from Ubuntu apt for the base pipeline. For higher
+# quality (GPU SIFT), rebuild from source in a downstream image.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    colmap \
+    && rm -rf /var/lib/apt/lists/* || echo "colmap apt install skipped (arch mismatch)"
+
+WORKDIR /app
+
+# Python deps — reuse the API pod's requirements + worker extras
+COPY requirements.txt requirements-worker.txt* /app/
+RUN pip install --no-cache-dir -r requirements.txt \
+    && (test -f requirements-worker.txt && pip install --no-cache-dir -r requirements-worker.txt || true)
+
+COPY app /app/app
+
+ENV PYTHONUNBUFFERED=1 \
+    LOG_LEVEL=INFO
+
+ENTRYPOINT ["python", "-m", "app.worker.gpu_worker"]
