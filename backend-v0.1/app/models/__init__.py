@@ -17,6 +17,9 @@ from app.models.airspace_calendar import AirspaceCalendarEntry
 from app.models.marketplace_monetization import (
     ModelListingPrice, ModelPurchaseOrder,
 )
+from app.models.scene_annotation import (
+    SceneAnnotation, SceneAnnotationReply,
+)
 from app.models.video_stream import VideoStream, VideoStreamProbe
 from app.models.model_marketplace import (
     ModelDeployment, ModelListing, ModelUsageEvent, ModelVersion,
