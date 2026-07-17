@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.community import CommunityPost
 from app.models.community_follow import CommunityFollow
 from app.models.user import User
+from app.services import community_notification as notif
 
 
 class FollowError(Exception):
@@ -43,6 +44,14 @@ async def follow_user(
     db.add(row)
     await db.commit()
     await db.refresh(row)
+    # Emit F3.4 notification to the followed user (fire-and-forget;
+    # failures here must not undo the follow itself).
+    try:
+        await notif.emit_new_follower(
+            db, followed_id=followed_id, follower_id=follower_id,
+        )
+    except Exception:
+        pass
     return _serialize(row, following=True)
 
 

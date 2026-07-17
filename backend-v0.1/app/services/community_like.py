@@ -10,6 +10,7 @@ from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.community import CommunityLike, CommunityPost
+from app.services import community_notification as notif
 
 
 # Hot score decay half-life (hours).
@@ -52,6 +53,17 @@ async def add_like(
     post.like_count = (post.like_count or 0) + 1
     await db.commit()
     await db.refresh(post)
+    # F3.4 notification (fire-and-forget).
+    if post.author_id is not None:
+        try:
+            await notif.emit_post_liked(
+                db,
+                post_author_id=post.author_id,
+                liker_id=user_id,
+                post_id=post_id,
+            )
+        except Exception:
+            pass
     return {
         "post_id": str(post_id),
         "liked": True,
