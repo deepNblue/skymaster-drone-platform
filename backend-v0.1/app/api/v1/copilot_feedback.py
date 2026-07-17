@@ -50,7 +50,7 @@ async def api_submit(
         raise _map(e)
 
 
-@router.delete("/turns/{turn_id}", status_code=204)
+@router.delete("/turns/{turn_id}", status_code=204, response_model=None)
 async def api_clear(
     turn_id: UUID,
     db: AsyncSession = Depends(get_db),

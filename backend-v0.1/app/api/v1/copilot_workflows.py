@@ -603,7 +603,7 @@ async def api_update_schedule(
     return _sched_to_resp(row)
 
 
-@router.delete("/schedules/{schedule_id}", status_code=204)
+@router.delete("/schedules/{schedule_id}", status_code=204, response_model=None)
 async def api_delete_schedule(
     schedule_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -743,7 +743,7 @@ async def update_workflow(
     return _to_record_response(row)
 
 
-@router.delete("/{wf_id}", status_code=204)
+@router.delete("/{wf_id}", status_code=204, response_model=None)
 async def delete_workflow(
     wf_id: UUID,
     db: AsyncSession = Depends(get_db),

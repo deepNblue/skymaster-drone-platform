@@ -40,7 +40,7 @@ async def api_follow(
         raise _map(e)
 
 
-@router.delete("/follows/{target_id}", status_code=204)
+@router.delete("/follows/{target_id}", status_code=204, response_model=None)
 async def api_unfollow(
     target_id: UUID,
     db: AsyncSession = Depends(get_db),

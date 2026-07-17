@@ -248,7 +248,7 @@ async def api_update_annotation(
     return AnnotationOut.from_row(row)
 
 
-@router.delete("/annotations/{ann_id}", status_code=204)
+@router.delete("/annotations/{ann_id}", status_code=204, response_model=None)
 async def api_delete_annotation(
     ann_id: UUID,
     db: AsyncSession = Depends(get_db),

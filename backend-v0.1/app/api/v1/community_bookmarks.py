@@ -49,7 +49,7 @@ async def api_add(
     }
 
 
-@router.delete("/{post_id}", status_code=204)
+@router.delete("/{post_id}", status_code=204, response_model=None)
 async def api_remove(
     post_id: UUID,
     db: AsyncSession = Depends(get_db),

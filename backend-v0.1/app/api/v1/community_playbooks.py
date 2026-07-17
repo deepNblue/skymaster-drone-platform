@@ -168,7 +168,7 @@ async def api_get(
     return PlaybookOut.from_row(row)
 
 
-@router.delete("/{slug}", status_code=204)
+@router.delete("/{slug}", status_code=204, response_model=None)
 async def api_delete(
     slug: str,
     db: AsyncSession = Depends(get_db),

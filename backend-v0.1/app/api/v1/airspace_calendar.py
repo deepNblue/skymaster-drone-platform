@@ -170,7 +170,7 @@ async def api_get(
     return CalendarEntryOut.from_row(row)
 
 
-@router.delete("/{entry_id}", status_code=204)
+@router.delete("/{entry_id}", status_code=204, response_model=None)
 async def api_delete(
     entry_id: UUID,
     db: AsyncSession = Depends(get_db),

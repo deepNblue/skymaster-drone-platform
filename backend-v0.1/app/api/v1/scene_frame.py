@@ -200,7 +200,7 @@ async def api_update_frame(
 
 
 @router.delete(
-    "/scenes/{scene_id}/frames/{frame_index}", status_code=204,
+    "/scenes/{scene_id}/frames/{frame_index}", status_code=204, response_model=None,
 )
 async def api_delete_frame(
     scene_id: UUID, frame_index: int,

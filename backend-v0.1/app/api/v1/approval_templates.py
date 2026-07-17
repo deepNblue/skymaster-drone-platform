@@ -224,7 +224,7 @@ async def api_update(
     return TemplateOut.from_row(row)
 
 
-@router.delete("/{template_id}", status_code=204)
+@router.delete("/{template_id}", status_code=204, response_model=None)
 async def api_delete(
     template_id: UUID,
     db: AsyncSession = Depends(get_db),

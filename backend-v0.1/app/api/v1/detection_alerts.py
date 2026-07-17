@@ -124,7 +124,7 @@ async def api_update(
     return _serialize(r)
 
 
-@router.delete("/{rule_id}", status_code=204)
+@router.delete("/{rule_id}", status_code=204, response_model=None)
 async def api_delete(
     rule_id: UUID,
     db: AsyncSession = Depends(get_db),

@@ -201,7 +201,7 @@ async def api_list_prices(
     return [PriceOut.from_row(r) for r in rows]
 
 
-@router.delete("/prices/{price_id}", status_code=204)
+@router.delete("/prices/{price_id}", status_code=204, response_model=None)
 async def api_retire_price(
     price_id: UUID,
     db: AsyncSession = Depends(get_db),
