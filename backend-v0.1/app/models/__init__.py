@@ -25,6 +25,7 @@ from app.models.detection_alert_rule import DetectionAlertRule
 from app.models.community_bookmark import CommunityBookmark
 from app.models.community_follow import CommunityFollow
 from app.models.community_notification import CommunityNotification
+from app.models.copilot_turn_feedback import CopilotTurnFeedback
 # CommunityLike is defined in app.models.community (T6.15 model)
 from app.models.video_stream import VideoStream, VideoStreamProbe
 from app.models.model_marketplace import (
