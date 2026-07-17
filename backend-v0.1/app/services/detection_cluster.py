@@ -74,6 +74,11 @@ def cluster_detections(
             or r.get("label") is None
         ):
             continue
+        # Normalize naive datetimes to UTC-aware for arithmetic safety.
+        ca = r["created_at"]
+        if isinstance(ca, datetime) and ca.tzinfo is None:
+            r = dict(r)
+            r["created_at"] = ca.replace(tzinfo=timezone.utc)
         valid.append(r)
     valid.sort(key=lambda r: r["created_at"])
 
@@ -187,19 +192,22 @@ async def load_recent_detections(
         q = q.where(VisionDetection.created_at >= since)
     q = q.order_by(desc(VisionDetection.created_at)).limit(min(limit, 5000))
     rows = (await db.execute(q)).scalars().all()
-    return [
-        {
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        ca = r.created_at
+        if ca is not None and ca.tzinfo is None:
+            ca = ca.replace(tzinfo=timezone.utc)
+        out.append({
             "id": str(r.id),
             "label": r.label,
             "confidence": r.confidence,
             "lat": r.lat,
             "lng": r.lng,
-            "created_at": r.created_at,
+            "created_at": ca,
             "drone_id": str(r.drone_id) if r.drone_id else None,
             "mission_id": str(r.mission_id) if r.mission_id else None,
-        }
-        for r in rows
-    ]
+        })
+    return out
 
 
 async def cluster_analytics(
