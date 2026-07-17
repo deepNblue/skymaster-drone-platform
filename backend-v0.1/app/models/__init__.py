@@ -22,6 +22,7 @@ from app.models.scene_annotation import (
 )
 from app.models.scene_frame import SceneFrame
 from app.models.detection_alert_rule import DetectionAlertRule
+from app.models.community_bookmark import CommunityBookmark
 from app.models.video_stream import VideoStream, VideoStreamProbe
 from app.models.model_marketplace import (
     ModelDeployment, ModelListing, ModelUsageEvent, ModelVersion,
