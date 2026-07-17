@@ -335,6 +335,33 @@ class CopilotAgentV2:
             messages.extend(history)
         messages.append({"role": "user", "content": prompt})
 
+        # v2.1 E2.3 · Inject long-term memory as system context.
+        # Best-effort: if lookup fails, agent continues without memory.
+        memory_ctx = ""
+        if db is not None and ctx.org_id is not None:
+            try:
+                from app.services.copilot_memory import search_memory, touch
+                hits = await search_memory(
+                    db, org_id=ctx.org_id, user_id=ctx.user_id,
+                    query=prompt, top_k=5,
+                )
+                if hits:
+                    lines = ["【长期记忆·可参考】"]
+                    for i, h in enumerate(hits, 1):
+                        lines.append(
+                            f"{i}. [{h.memory.kind}] {h.memory.content}"
+                        )
+                    memory_ctx = "\n".join(lines)
+                    await self._persist_step(db, trace_id, "memory_recalled", {
+                        "count": len(hits),
+                        "ids": [str(h.memory.id) for h in hits],
+                    })
+                    await touch(db, memory_ids=[h.memory.id for h in hits])
+            except Exception:  # pragma: no cover — memory is optional
+                memory_ctx = ""
+        # Stash for the system-prompt merge below
+        self._memory_ctx_for_turn = memory_ctx
+
         summary: dict[str, Any] = {
             "text": "",
             "tool_calls": [],
@@ -358,9 +385,14 @@ class CopilotAgentV2:
             try:
                 # LLM providers can misbehave; give them a per-call timeout too
                 remaining = max(1.0, self.config.per_turn_timeout - elapsed)
+                # v2.1 E2.3 · merge memory context into system prompt if present
+                sys_content = self.config.system_prompt
+                mctx = getattr(self, "_memory_ctx_for_turn", "") or ""
+                if mctx:
+                    sys_content = f"{sys_content}\n\n{mctx}"
                 resp = await asyncio.wait_for(
                     self.llm.chat_completion(
-                        messages=[{"role": "system", "content": self.config.system_prompt}]
+                        messages=[{"role": "system", "content": sys_content}]
                                  + messages,
                         tools=specs,
                     ),
@@ -412,8 +444,61 @@ class CopilotAgentV2:
                     )
                     continue
 
-                # Sensitive tools go through approval
-                if spec.permission == "sensitive":
+                # v2.1 F4.4 · Policy interception (org allowlist/blocklist/risk)
+                policy_decision = None
+                if db is not None and ctx.org_id is not None:
+                    try:
+                        from app.services.copilot_tool_policy import (
+                            evaluate as _policy_evaluate,
+                            record_audit as _policy_audit,
+                        )
+                        policy_decision = await _policy_evaluate(
+                            db, org_id=ctx.org_id, tool_name=call.name,
+                        )
+                    except Exception:  # pragma: no cover - policy engine failure
+                        policy_decision = None
+
+                if policy_decision and policy_decision.action == "blocked":
+                    await emit.tool(
+                        "error", call.name,
+                        error=f"blocked by policy: {policy_decision.reason}",
+                    )
+                    await self._persist_step(db, trace_id, "policy_blocked", {
+                        "tool": call.name,
+                        "reason": policy_decision.reason,
+                        "risk_level": policy_decision.risk_level,
+                    })
+                    try:
+                        await _policy_audit(
+                            db,
+                            org_id=ctx.org_id,
+                            user_id=ctx.user_id,
+                            tool_name=call.name,
+                            status="blocked",
+                            permission=policy_decision.permission,
+                            risk_level=policy_decision.risk_level,
+                            arguments=call.arguments,
+                            reason=policy_decision.reason,
+                            session_id=session_id,
+                            trace_id=trace_id,
+                        )
+                    except Exception:  # pragma: no cover
+                        pass
+                    _messages_add_tool_result(
+                        messages, call.id, call.name,
+                        {"error": "blocked by org policy",
+                         "reason": policy_decision.reason},
+                        self.provider, is_error=True,
+                    )
+                    continue
+
+                # Sensitive tools go through approval (also triggered by policy
+                # risk-gate decisions where action == "approval_required").
+                needs_approval = (
+                    spec.permission == "sensitive"
+                    or (policy_decision and policy_decision.action == "approval_required")
+                )
+                if needs_approval:
                     approval_id = await self._enqueue_approval(
                         db, session_id, trace_id, call,
                     )
@@ -423,6 +508,24 @@ class CopilotAgentV2:
                         "tool": call.name, "approval_id": approval_id,
                         "arguments": call.arguments,
                     })
+                    try:
+                        if db is not None and ctx.org_id is not None:
+                            await _policy_audit(
+                                db,
+                                org_id=ctx.org_id,
+                                user_id=ctx.user_id,
+                                tool_name=call.name,
+                                status="approval_required",
+                                permission=spec.permission,
+                                risk_level=spec.risk_level,
+                                arguments=call.arguments,
+                                reason=(policy_decision.reason
+                                        if policy_decision else "sensitive tool"),
+                                session_id=session_id,
+                                trace_id=trace_id,
+                            )
+                    except Exception:  # pragma: no cover
+                        pass
                     # Simulate a synthetic tool_result so the LLM knows it's pending
                     _messages_add_tool_result(
                         messages, call.id, call.name,
@@ -433,8 +536,11 @@ class CopilotAgentV2:
                     continue
 
                 # Read-only tool — execute immediately
+                import time as _time
+                _t0 = _time.perf_counter()
                 await emit.tool("start", call.name, arguments=call.arguments)
                 result, is_error = await self._call_tool(call, ctx)
+                _lat_ms = int((_time.perf_counter() - _t0) * 1000)
                 await emit.tool(
                     "end" if not is_error else "error",
                     call.name, result=result,
@@ -444,6 +550,25 @@ class CopilotAgentV2:
                     "tool": call.name, "arguments": call.arguments,
                     "result": result, "is_error": is_error,
                 })
+                try:
+                    if db is not None and ctx.org_id is not None:
+                        await _policy_audit(
+                            db,
+                            org_id=ctx.org_id,
+                            user_id=ctx.user_id,
+                            tool_name=call.name,
+                            status="error" if is_error else "executed",
+                            permission=spec.permission,
+                            risk_level=spec.risk_level,
+                            arguments=call.arguments,
+                            result=None if is_error else result,
+                            error=str(result) if is_error else None,
+                            latency_ms=_lat_ms,
+                            session_id=session_id,
+                            trace_id=trace_id,
+                        )
+                except Exception:  # pragma: no cover
+                    pass
                 _messages_add_tool_result(
                     messages, call.id, call.name,
                     result, self.provider, is_error=is_error,
@@ -468,6 +593,29 @@ class CopilotAgentV2:
             tool_calls=summary["tool_calls"],
             pending_approvals=summary["pending_approvals"],
         )
+
+        # v2.1 E2.3 · auto-consolidate this trace into task_history memory
+        # so successful task runs feed back into future recall.
+        if (
+            db is not None and trace_id is not None
+            and ctx.org_id is not None
+            and summary.get("stopped_reason") in (None, "end_turn", "completed")
+        ):
+            try:
+                from app.services.copilot_memory import consolidate_from_trace
+                await consolidate_from_trace(
+                    db,
+                    org_id=ctx.org_id,
+                    user_id=ctx.user_id,
+                    trace_id=trace_id,
+                    prompt=prompt,
+                    intent=summary.get("intent"),
+                    output_text=summary.get("text"),
+                    status="completed",
+                )
+            except Exception:  # pragma: no cover — best-effort
+                pass
+
         return summary
 
     async def _enqueue_approval(

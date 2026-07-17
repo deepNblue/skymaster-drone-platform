@@ -80,3 +80,11 @@ jobs:
         run: npx tsc --noEmit
       - name: PLY/Splat parser tests
         run: bash tests/run-ply-tests.sh
+      - name: Copilot tool-policy tests (F4.4)
+        run: bash tests/run-tool-policy-tests.sh
+      - name: Copilot memory tests (E2.3)
+        run: bash tests/run-memory-tests.sh
+      - name: Copilot approval-policy tests (E2.5)
+        run: bash tests/run-approval-policy-tests.sh
+      - name: Copilot marketplace tests (E2.6)
+        run: bash tests/run-marketplace-tests.sh

@@ -28,6 +28,20 @@ from app.models.community_notification import CommunityNotification
 from app.models.copilot_prompt_template import CopilotPromptTemplate
 from app.models.copilot_turn_feedback import CopilotTurnFeedback
 from app.models.copilot_usage import CopilotOrgQuota, CopilotUsage
+from app.models.copilot_tool_audit import (
+    CopilotOrgToolPolicy,
+    CopilotToolAudit,
+)
+from app.models.copilot_memory import CopilotMemory
+from app.models.copilot_approval_policy import (
+    CopilotApprovalPolicy,
+    CopilotApprovalSignoff,
+)
+from app.models.copilot_workflow_marketplace import (
+    CopilotWorkflowListing,
+    CopilotWorkflowRating,
+    CopilotWorkflowInstall,
+)
 # CommunityLike is defined in app.models.community (T6.15 model)
 from app.models.video_stream import VideoStream, VideoStreamProbe
 from app.models.model_marketplace import (

@@ -671,6 +671,9 @@ class ToolSpec:
     args_schema: type[BaseModel]
     func: ToolCallable
     permission: str = "readonly"  # "readonly" | "sensitive"
+    # v2.1 F4.4 · risk tier used by copilot_tool_policy for interception.
+    # Values: "low" | "medium" | "high" | "critical".
+    risk_level: str = "low"
 
 
 class ToolRegistry:
@@ -681,6 +684,9 @@ class ToolRegistry:
 
     def register(self, spec: ToolSpec) -> None:
         self._tools[spec.name] = spec
+
+    def get(self, name: str) -> ToolSpec | None:  # v2.1 F4.4
+        return self._tools.get(name)
 
     def names(self) -> list[str]:
         return list(self._tools.keys())
@@ -773,6 +779,7 @@ def build_default_registry() -> ToolRegistry:
             args_schema=CreateMissionArgs,
             func=create_mission,  # type: ignore[arg-type]
             permission="sensitive",
+            risk_level="high",
         )
     )
     r.register(
@@ -785,6 +792,7 @@ def build_default_registry() -> ToolRegistry:
             args_schema=DispatchMissionArgs,
             func=dispatch_mission,  # type: ignore[arg-type]
             permission="sensitive",
+            risk_level="critical",
         )
     )
     r.register(
@@ -796,6 +804,7 @@ def build_default_registry() -> ToolRegistry:
             args_schema=AbortMissionArgs,
             func=abort_mission,  # type: ignore[arg-type]
             permission="sensitive",
+            risk_level="high",
         )
     )
     # ---- Vision AI query tools (T5.0) --------------------------------
@@ -866,6 +875,7 @@ def build_default_registry() -> ToolRegistry:
             args_schema=DispatchRpaAuthorityArgs,
             func=dispatch_rpa_authority,  # type: ignore[arg-type]
             permission="sensitive",
+            risk_level="high",
         )
     )
     r.register(
@@ -884,11 +894,24 @@ def build_default_registry() -> ToolRegistry:
     return r
 
 
+# v2.1 F4.4 · Cached singleton for policy engine / API introspection.
+_DEFAULT_REGISTRY: ToolRegistry | None = None
+
+
+def get_registry() -> ToolRegistry:
+    """Return a cached ToolRegistry populated with default tools."""
+    global _DEFAULT_REGISTRY
+    if _DEFAULT_REGISTRY is None:
+        _DEFAULT_REGISTRY = build_default_registry()
+    return _DEFAULT_REGISTRY
+
+
 __all__ = [
     "ToolContext",
     "ToolRegistry",
     "ToolSpec",
     "build_default_registry",
+    "get_registry",
     "list_drones",
     "get_drone_status",
     "check_airspace",
