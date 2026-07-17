@@ -202,6 +202,125 @@ export function averagePsnr(frames: SceneFrame[]): number | null {
   return vals.reduce((a, b) => a + b, 0) / vals.length;
 }
 
+// ---- D3.3 · Frame diff / change detection ------------------------
+
+export type Severity = 'info' | 'low' | 'medium' | 'high' | 'critical';
+
+export const SEVERITY_COLOR_DIFF: Record<Severity, string> = {
+  info: '#94a3b8',
+  low: '#fadb14',
+  medium: '#fa8c16',
+  high: '#f5222d',
+  critical: '#a8071a',
+};
+
+export const SEVERITY_LABEL_DIFF: Record<Severity, string> = {
+  info: '信息',
+  low: '轻微',
+  medium: '中等',
+  high: '严重',
+  critical: '紧急',
+};
+
+export interface ChangePoint {
+  from_index: number;
+  to_index: number;
+  severity: Severity;
+  reasons: string[];
+  psnr_delta: number | null;
+  time_gap_s: number | null;
+  lighting_from: Lighting | null;
+  lighting_to: Lighting | null;
+}
+
+export interface ChangeReport {
+  scene_id: string;
+  total_frames: number;
+  change_points: ChangePoint[];
+  critical_count: number;
+  high_count: number;
+  medium_count: number;
+}
+
+export function getFrameDiff(
+  sceneId: string, a: number, b: number,
+  thresholds?: {
+    psnr_warn?: number; psnr_crit?: number;
+    time_warn_s?: number; time_crit_s?: number;
+  },
+): Promise<ChangePoint> {
+  const p = new URLSearchParams();
+  p.set('a', String(a));
+  p.set('b', String(b));
+  if (thresholds?.psnr_warn != null)
+    p.set('psnr_warn', String(thresholds.psnr_warn));
+  if (thresholds?.psnr_crit != null)
+    p.set('psnr_crit', String(thresholds.psnr_crit));
+  if (thresholds?.time_warn_s != null)
+    p.set('time_warn_s', String(thresholds.time_warn_s));
+  if (thresholds?.time_crit_s != null)
+    p.set('time_crit_s', String(thresholds.time_crit_s));
+  return _do(
+    `/scenes/${encodeURIComponent(sceneId)}/frames/diff?${p.toString()}`,
+  );
+}
+
+export function getChangeReport(
+  sceneId: string,
+  opts?: {
+    min_severity?: Severity;
+    psnr_warn?: number; psnr_crit?: number;
+    time_warn_s?: number; time_crit_s?: number;
+  },
+): Promise<ChangeReport> {
+  const p = new URLSearchParams();
+  if (opts?.min_severity) p.set('min_severity', opts.min_severity);
+  if (opts?.psnr_warn != null) p.set('psnr_warn', String(opts.psnr_warn));
+  if (opts?.psnr_crit != null) p.set('psnr_crit', String(opts.psnr_crit));
+  if (opts?.time_warn_s != null)
+    p.set('time_warn_s', String(opts.time_warn_s));
+  if (opts?.time_crit_s != null)
+    p.set('time_crit_s', String(opts.time_crit_s));
+  const qs = p.toString();
+  return _do(
+    `/scenes/${encodeURIComponent(sceneId)}/frames/changes` +
+      (qs ? '?' + qs : ''),
+  );
+}
+
+// Pure helpers -----------------------------------------------------
+
+/**
+ * Given a change report, produce ordered severity ranks for
+ * Slider mark rendering.
+ */
+export function pointsToMarks(
+  points: ChangePoint[],
+): Record<number, { color: string; label: string; severity: Severity }> {
+  const m: Record<number, {
+    color: string; label: string; severity: Severity;
+  }> = {};
+  for (const p of points) {
+    // Attach at to_index (change happens moving into this frame).
+    const idx = p.to_index;
+    const existing = m[idx];
+    // Keep worst severity if two changes land on same index.
+    if (existing) {
+      const order: Severity[] = [
+        'info', 'low', 'medium', 'high', 'critical',
+      ];
+      if (order.indexOf(p.severity) <= order.indexOf(existing.severity))
+        continue;
+    }
+    m[idx] = {
+      color: SEVERITY_COLOR_DIFF[p.severity],
+      severity: p.severity,
+      label: `●${idx}`,
+    };
+  }
+  return m;
+}
+
 /**
  * Group frames into contiguous runs of the same lighting condition.
  * Useful for coloring the timeline background bar.

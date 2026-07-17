@@ -21,10 +21,11 @@ import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
-  LIGHTING_COLOR, LIGHTING_LABEL, LIGHTINGS, Lighting,
-  SceneFrame, TimelineSummary, averagePsnr, deleteFrame, getFrame,
+  ChangeReport, LIGHTING_COLOR, LIGHTING_LABEL, LIGHTINGS, Lighting,
+  SEVERITY_COLOR_DIFF, SEVERITY_LABEL_DIFF, SceneFrame, Severity,
+  TimelineSummary, averagePsnr, deleteFrame, getChangeReport, getFrame,
   getTimelineSummary, lightingRuns, listFrames, nearestKeyframe,
-  updateFrame,
+  pointsToMarks, updateFrame,
 } from '@/lib/scene_frame';
 
 const { Text } = Typography;
@@ -45,6 +46,11 @@ export default function SceneFramesPage() {
   // Editor state.
   const [editFrame, setEditFrame] = useState<SceneFrame | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // D3.4 · change detection
+  const [changeReport, setChangeReport] = useState<ChangeReport | null>(null);
+  const [changeMinSev, setChangeMinSev] = useState<Severity>('medium');
+  const [changeLoading, setChangeLoading] = useState(false);
 
   const load = useCallback(async () => {
     if (!sid) return;
@@ -137,21 +143,49 @@ export default function SceneFramesPage() {
     });
   }, [sid, load]);
 
+  // D3.4 · load change report
+  const loadChanges = useCallback(async () => {
+    if (!sid) return;
+    setChangeLoading(true);
+    try {
+      const r = await getChangeReport(sid, { min_severity: changeMinSev });
+      setChangeReport(r);
+    } catch (e: any) {
+      message.error(`变化点加载失败: ${e?.message ?? e}`);
+    } finally {
+      setChangeLoading(false);
+    }
+  }, [sid, changeMinSev]);
+
   const minIdx = frames[0]?.frame_index ?? 0;
   const maxIdx = frames[frames.length - 1]?.frame_index ?? 0;
 
-  // Slider marks: highlight keyframes.
+  // Slider marks: highlight keyframes AND change points.
   const marks = useMemo(() => {
-    const m: Record<number, { style: React.CSSProperties; label: string }> =
-      {};
+    const m: Record<number, {
+      style: React.CSSProperties; label: string;
+    }> = {};
     frames.filter((f) => f.is_keyframe).forEach((f) => {
       m[f.frame_index] = {
         style: { color: '#fa8c16' },
         label: `⭐${f.frame_index}`,
       };
     });
+    // Change points override keyframe marks (usually more urgent).
+    if (changeReport) {
+      const changeMarks = pointsToMarks(changeReport.change_points);
+      for (const [k, v] of Object.entries(changeMarks)) {
+        const idx = Number(k);
+        m[idx] = {
+          style: { color: v.color, fontWeight: 700 },
+          label: `${v.label}${
+            m[idx] ? '' : ''
+          }`,
+        };
+      }
+    }
     return m;
-  }, [frames]);
+  }, [frames, changeReport]);
 
   const cols: ColumnsType<SceneFrame> = [
     {
@@ -324,6 +358,76 @@ export default function SceneFramesPage() {
                 )}
               </div>
             )}
+          </>
+        )}
+      </Card>
+
+      <Card size="small" title="🚨 变化检测"
+        style={{ marginBottom: 12 }}
+        extra={
+          <Space>
+            <Text type="secondary">最小严重度:</Text>
+            <Select value={changeMinSev}
+              style={{ width: 100 }}
+              onChange={setChangeMinSev}
+              options={(['low', 'medium', 'high', 'critical'] as Severity[])
+                .map((s) => ({
+                  label: SEVERITY_LABEL_DIFF[s], value: s,
+                }))
+              }
+            />
+            <Button type="primary" loading={changeLoading}
+              onClick={() => void loadChanges()}
+            >扫描时间轴</Button>
+          </Space>
+        }
+      >
+        {!changeReport ? (
+          <Text type="secondary">
+            点击"扫描时间轴"检测 PSNR 突降 / 光照突变 / 采集时间间断.
+          </Text>
+        ) : changeReport.change_points.length === 0 ? (
+          <Alert type="success" showIcon
+            message={`已扫描 ${changeReport.total_frames} 帧, 未发现问题`}
+          />
+        ) : (
+          <>
+            <Space size="middle" style={{ marginBottom: 8 }}>
+              <Tag color="red">紧急 {changeReport.critical_count}</Tag>
+              <Tag color="volcano">严重 {changeReport.high_count}</Tag>
+              <Tag color="orange">中等 {changeReport.medium_count}</Tag>
+              <Text type="secondary">
+                共 {changeReport.change_points.length} 个变化点
+              </Text>
+            </Space>
+            <div style={{
+              maxHeight: 180, overflowY: 'auto',
+              border: '1px solid #f0f0f0', borderRadius: 4,
+              padding: 8,
+            }}>
+              {changeReport.change_points.map((p, i) => (
+                <div key={i} style={{
+                  padding: '4px 0',
+                  borderBottom: i < changeReport.change_points.length - 1
+                    ? '1px dashed #eee' : 'none',
+                }}>
+                  <Space size="small">
+                    <Tag color={SEVERITY_COLOR_DIFF[p.severity]}
+                      style={{ margin: 0 }}
+                    >{SEVERITY_LABEL_DIFF[p.severity]}</Tag>
+                    <Button type="link" size="small"
+                      style={{ padding: 0 }}
+                      onClick={() => setCurrent(p.to_index)}
+                    >
+                      帧 {p.from_index} → {p.to_index}
+                    </Button>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {p.reasons.join(' · ')}
+                    </Text>
+                  </Space>
+                </div>
+              ))}
+            </div>
           </>
         )}
       </Card>

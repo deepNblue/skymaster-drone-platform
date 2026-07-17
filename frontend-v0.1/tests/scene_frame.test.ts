@@ -47,8 +47,9 @@ function jsonResp(status: number, obj: unknown): Response {
 
 import {
   averagePsnr, bulkCreateFrames, createFrame, deleteFrame, getFrame,
-  getTimelineSummary, LIGHTING_LABEL, lightingRuns, listFrames,
-  nearestKeyframe, updateFrame,
+  getChangeReport, getFrameDiff, getTimelineSummary,
+  LIGHTING_LABEL, lightingRuns, listFrames,
+  nearestKeyframe, pointsToMarks, updateFrame,
 } from '../lib/scene_frame';
 
 test('listFrames without opts', async () => {
@@ -204,4 +205,88 @@ test('LIGHTING_LABEL exposes Chinese labels', () => {
   assert.strictEqual(LIGHTING_LABEL.day, '白天');
   assert.strictEqual(LIGHTING_LABEL.dusk, '黄昏');
   assert.strictEqual(LIGHTING_LABEL.overcast, '阴天');
+});
+
+// -- D3.3 change detection ----------------------------------------
+
+test('getFrameDiff forwards a/b + thresholds', async () => {
+  reset();
+  responder = () => jsonResp(200, {
+    from_index: 0, to_index: 1, severity: 'critical',
+    reasons: ['PSNR 下降 8.00 dB'],
+    psnr_delta: 8.0, time_gap_s: null,
+    lighting_from: 'day', lighting_to: 'night',
+  });
+  const r = await getFrameDiff('s1', 0, 1, {
+    psnr_warn: 2, psnr_crit: 5,
+  });
+  assert.strictEqual(r.severity, 'critical');
+  assert.match(calls[0].url, /a=0/);
+  assert.match(calls[0].url, /b=1/);
+  assert.match(calls[0].url, /psnr_warn=2/);
+  assert.match(calls[0].url, /psnr_crit=5/);
+});
+
+test('getChangeReport applies min_severity filter', async () => {
+  reset();
+  responder = () => jsonResp(200, {
+    scene_id: 's1', total_frames: 5,
+    change_points: [], critical_count: 0,
+    high_count: 0, medium_count: 0,
+  });
+  await getChangeReport('s1', { min_severity: 'critical' });
+  assert.match(calls[0].url, /min_severity=critical/);
+});
+
+test('getChangeReport no options', async () => {
+  reset();
+  responder = () => jsonResp(200, {
+    scene_id: 's1', total_frames: 0,
+    change_points: [], critical_count: 0,
+    high_count: 0, medium_count: 0,
+  });
+  await getChangeReport('s1');
+  // no query string when no opts.
+  assert.strictEqual(calls[0].url.includes('?'), false);
+});
+
+test('pointsToMarks attaches at to_index with severity color', () => {
+  const points = [
+    {
+      from_index: 0, to_index: 1, severity: 'medium' as const,
+      reasons: [], psnr_delta: 3.5, time_gap_s: null,
+      lighting_from: null, lighting_to: null,
+    },
+    {
+      from_index: 3, to_index: 4, severity: 'critical' as const,
+      reasons: [], psnr_delta: 8, time_gap_s: null,
+      lighting_from: 'day' as const, lighting_to: 'night' as const,
+    },
+  ];
+  const m = pointsToMarks(points);
+  assert.strictEqual(m[1].severity, 'medium');
+  assert.strictEqual(m[4].severity, 'critical');
+  assert.match(m[4].color, /^#/);
+});
+
+test('pointsToMarks keeps worst on collision', () => {
+  const points = [
+    {
+      from_index: 0, to_index: 5, severity: 'low' as const,
+      reasons: [], psnr_delta: null, time_gap_s: null,
+      lighting_from: null, lighting_to: null,
+    },
+    {
+      from_index: 4, to_index: 5, severity: 'high' as const,
+      reasons: [], psnr_delta: 5, time_gap_s: null,
+      lighting_from: null, lighting_to: null,
+    },
+    {
+      from_index: 3, to_index: 5, severity: 'medium' as const,
+      reasons: [], psnr_delta: null, time_gap_s: null,
+      lighting_from: null, lighting_to: null,
+    },
+  ];
+  const m = pointsToMarks(points);
+  assert.strictEqual(m[5].severity, 'high');
 });
