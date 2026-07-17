@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1 import admin, aaas, airspace_calendar, annotation_search, approval_templates, approvals, audit_export, auth, auth_2fa, auth_events, auth_reset, auth_sessions, auth_sso, ciio, community, community_playbooks, compliance, copilot, copilot_workflows, crypto_sm2, drones, geofence, health, marketplace_monetization, missions, model_marketplace as mm_router, officers, preflight, remoteid, scene_annotation, scene_frame, scene_job, scene_marketplace, scene_moderation, scenes, scenes_artifacts, scenes_upload, sim, streams, trajectory, uom, video_streams, vision_copilot as vc_router, websocket
+from app.api.v1 import admin, aaas, airspace_calendar, annotation_search, approval_templates, approvals, audit_export, auth, auth_2fa, auth_events, auth_reset, auth_sessions, auth_sso, ciio, community, community_playbooks, compliance, copilot, copilot_workflows, crypto_sm2, drones, frame_diff, geofence, health, marketplace_monetization, missions, model_marketplace as mm_router, officers, preflight, remoteid, scene_annotation, scene_frame, scene_job, scene_marketplace, scene_moderation, scenes, scenes_artifacts, scenes_upload, sim, streams, trajectory, uom, video_streams, vision_copilot as vc_router, websocket
 from app.services.metrics import router as metrics_router
 
 api_router = APIRouter()
@@ -19,6 +19,7 @@ api_router.include_router(approval_templates.router)
 api_router.include_router(airspace_calendar.router)
 api_router.include_router(marketplace_monetization.router)
 api_router.include_router(scene_annotation.router)
+api_router.include_router(frame_diff.router)
 api_router.include_router(scene_frame.router)
 api_router.include_router(annotation_search.router)
 api_router.include_router(aaas.router)
