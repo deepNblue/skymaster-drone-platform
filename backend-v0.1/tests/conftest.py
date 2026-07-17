@@ -118,6 +118,7 @@ async def client() -> AsyncClient:
             community_playbook, approval_template, airspace_calendar,
             marketplace_monetization,
             scene_annotation,
+            scene_frame,
         )
         try:
             async with engine.begin() as conn:
