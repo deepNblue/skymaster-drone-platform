@@ -27,7 +27,8 @@ import {
   GEOM_KIND_LABEL, SEVERITY_COLOR, SEVERITY_LABEL,
   createAnnotation, createReply, deleteAnnotation,
   getAnnotationStats, lineLengthM, listAnnotations,
-  listReplies, polygonAreaM2, updateAnnotation,
+  listReplies, polygonAreaM2, searchAnnotations,
+  suggestAnnotation, updateAnnotation,
 } from '../lib/scene_annotation';
 
 function reset() {
@@ -141,6 +142,43 @@ async function runTests() {
       }),
       /HTTP 400/,
     );
+  });
+
+  await test('searchAnnotations forwards query + limit', async () => {
+    reset();
+    responder = () => jsonResp(200, {
+      parsed: {
+        raw: '裂缝', keywords: ['裂缝'],
+        geom_kinds: ['line'], severities: [], layers: [],
+      },
+      hits: [{
+        annotation: { id: 'a1', label: '断裂', geom_kind: 'line' },
+        score: 5,
+        matched_reasons: ['label 命中 裂缝'],
+      }],
+    });
+    const r = await searchAnnotations('s1', '裂缝', 10);
+    assert.match(calls[0].url, /annotation-search\/scenes\/s1/);
+    assert.match(calls[0].url, /query=%E8%A3%82%E7%BC%9D/);
+    assert.match(calls[0].url, /limit=10/);
+    assert.strictEqual(r.hits.length, 1);
+    assert.strictEqual(r.hits[0].score, 5);
+  });
+
+  await test('suggestAnnotation returns suggestion', async () => {
+    reset();
+    responder = () => jsonResp(200, {
+      query: '淤积区严重',
+      suggestion: {
+        geom_kind: 'polygon',
+        severity: 'critical',
+        layer: 'default',
+        label: '淤积区严重',
+      },
+    });
+    const r = await suggestAnnotation('淤积区严重');
+    assert.strictEqual(r.suggestion?.geom_kind, 'polygon');
+    assert.strictEqual(r.suggestion?.severity, 'critical');
   });
 }
 

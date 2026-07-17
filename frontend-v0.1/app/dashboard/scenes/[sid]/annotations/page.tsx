@@ -24,9 +24,10 @@ import {
 
 import {
   Annotation, AnnotationReply, AnnotationStats, GEOM_KIND_LABEL,
-  GeomKind, SEVERITY_COLOR, SEVERITY_LABEL, Severity,
+  GeomKind, SEVERITY_COLOR, SEVERITY_LABEL, Severity, SearchHit,
   createAnnotation, createReply, deleteAnnotation, getAnnotationStats,
-  listAnnotations, listReplies, updateAnnotation,
+  listAnnotations, listReplies, searchAnnotations, suggestAnnotation,
+  updateAnnotation,
 } from '@/lib/scene_annotation';
 
 const { Title, Paragraph, Text } = Typography;
@@ -56,6 +57,15 @@ export default function SceneAnnotationsPage() {
   const [replyOpen, setReplyOpen] = useState<Annotation | null>(null);
   const [replies, setReplies] = useState<AnnotationReply[]>([]);
   const [replyBody, setReplyBody] = useState('');
+
+  // D2.6 · semantic search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchHits, setSearchHits] = useState<SearchHit[] | null>(null);
+  const [searchParsed, setSearchParsed] = useState<{
+    keywords: string[]; geom_kinds: string[];
+    severities: string[]; layers: string[];
+  } | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -199,6 +209,67 @@ export default function SceneAnnotationsPage() {
     }
   }, [replyOpen, replyBody]);
 
+  // D2.6 · semantic search
+  const runSearch = useCallback(async () => {
+    if (!searchQuery.trim()) {
+      setSearchHits(null);
+      setSearchParsed(null);
+      return;
+    }
+    setSearchLoading(true);
+    try {
+      const r = await searchAnnotations(sid, searchQuery.trim(), 20);
+      setSearchHits(r.hits);
+      setSearchParsed({
+        keywords: r.parsed.keywords,
+        geom_kinds: r.parsed.geom_kinds,
+        severities: r.parsed.severities,
+        layers: r.parsed.layers,
+      });
+    } catch (e: any) {
+      message.error(`搜索失败: ${e?.message ?? e}`);
+    } finally {
+      setSearchLoading(false);
+    }
+  }, [sid, searchQuery]);
+
+  const applySuggestion = useCallback(async () => {
+    if (!searchQuery.trim()) return;
+    try {
+      const r = await suggestAnnotation(searchQuery.trim());
+      if (!r.suggestion) {
+        message.info('无可用建议');
+        return;
+      }
+      setEditing(null);
+      setCreating(true);
+      form.setFieldsValue({
+        geom_kind: r.suggestion.geom_kind,
+        severity: r.suggestion.severity,
+        layer: r.suggestion.layer,
+        label: r.suggestion.label,
+        color: '#22d3ee',
+        geom_vertices_json:
+          r.suggestion.geom_kind === 'point'
+            ? '[[0, 0, 0]]'
+            : r.suggestion.geom_kind === 'line'
+              ? '[[0, 0, 0], [1, 0, 0]]'
+              : '[[0, 0, 0], [1, 0, 0], [1, 1, 0]]',
+      });
+      message.success(
+        `已按 "${searchQuery.trim()}" 生成建议模板, 请补充顶点后保存`,
+      );
+    } catch (e: any) {
+      message.error(`建议获取失败: ${e?.message ?? e}`);
+    }
+  }, [searchQuery, form]);
+
+  const clearSearch = useCallback(() => {
+    setSearchQuery('');
+    setSearchHits(null);
+    setSearchParsed(null);
+  }, []);
+
   const cols: ColumnsType<Annotation> = [
     {
       title: '状态', dataIndex: 'resolved', width: 68,
@@ -329,6 +400,86 @@ export default function SceneAnnotationsPage() {
           </Row>
         </Card>
       )}
+
+      {/* D2.6 · Copilot Agent semantic search */}
+      <Card size="small" style={{ marginBottom: 12 }}
+        title={<Space><span>🤖 Copilot 语义搜索</span></Space>}
+        extra={searchParsed && (
+          <Space size={4} wrap>
+            {searchParsed.keywords.map(k => <Tag key={k}>{k}</Tag>)}
+            {searchParsed.geom_kinds.map(k => (
+              <Tag key={k} color="blue">{GEOM_KIND_LABEL[k as GeomKind]}</Tag>
+            ))}
+            {searchParsed.severities.map(s => (
+              <Tag key={s} color={SEVERITY_COLOR[s as Severity]}>
+                {SEVERITY_LABEL[s as Severity]}
+              </Tag>
+            ))}
+            {searchParsed.layers.map(l => (
+              <Tag key={l} color="purple">{l}</Tag>
+            ))}
+          </Space>
+        )}
+      >
+        <Space.Compact style={{ width: '100%' }}>
+          <Input
+            placeholder='试试 "东侧墙的紧急裂缝" 或 "淤积区严重"'
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onPressEnter={() => void runSearch()}
+            allowClear
+            onClear={clearSearch}
+          />
+          <Button type="primary" loading={searchLoading}
+            onClick={() => void runSearch()}
+          >搜索</Button>
+          <Button onClick={() => void applySuggestion()}>建议模板</Button>
+          <Button onClick={clearSearch}>清除</Button>
+        </Space.Compact>
+        {searchHits && (
+          <div style={{ marginTop: 8 }}>
+            {searchHits.length === 0 ? (
+              <Alert type="info" showIcon message="未找到匹配的标注" />
+            ) : (
+              <List
+                size="small"
+                bordered
+                dataSource={searchHits}
+                renderItem={(h) => (
+                  <List.Item
+                    actions={[
+                      <Button key="e" size="small" type="link"
+                        onClick={() => openEdit(h.annotation)}
+                      >查看</Button>,
+                      <Button key="r" size="small" type="link"
+                        onClick={() => void openReplies(h.annotation)}
+                      >讨论</Button>,
+                    ]}
+                  >
+                    <Space direction="vertical" size={0}
+                      style={{ flex: 1 }}>
+                      <Space>
+                        <Tag color="gold">分 {h.score}</Tag>
+                        <Text strong>{h.annotation.label}</Text>
+                        <Tag color={SEVERITY_COLOR[h.annotation.severity]}>
+                          {SEVERITY_LABEL[h.annotation.severity]}
+                        </Tag>
+                        <Tag>{GEOM_KIND_LABEL[h.annotation.geom_kind]}</Tag>
+                        <Tag>{h.annotation.layer}</Tag>
+                      </Space>
+                      {h.matched_reasons.length > 0 && (
+                        <Text type="secondary" style={{ fontSize: 11 }}>
+                          原因: {h.matched_reasons.join(' · ')}
+                        </Text>
+                      )}
+                    </Space>
+                  </List.Item>
+                )}
+              />
+            )}
+          </div>
+        )}
+      </Card>
 
       <Space style={{ marginBottom: 8 }} wrap>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>

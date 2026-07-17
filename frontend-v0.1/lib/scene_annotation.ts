@@ -216,3 +216,50 @@ export function createReply(
     { method: 'POST', body: JSON.stringify({ body }) },
   );
 }
+
+// ---- Semantic search (D2.4) ----------------------------------------
+
+export interface ParsedQuery {
+  raw: string;
+  keywords: string[];
+  geom_kinds: GeomKind[];
+  severities: Severity[];
+  layers: string[];
+}
+
+export interface SearchHit {
+  annotation: Annotation;
+  score: number;
+  matched_reasons: string[];
+}
+
+export interface SearchResult {
+  parsed: ParsedQuery;
+  hits: SearchHit[];
+}
+
+export interface SearchSuggestion {
+  geom_kind: GeomKind;
+  severity: Severity;
+  layer: string;
+  label: string;
+}
+
+export function searchAnnotations(
+  sceneId: string, query: string, limit = 20,
+): Promise<SearchResult> {
+  const p = new URLSearchParams();
+  p.set('query', query);
+  p.set('limit', String(limit));
+  return _do(
+    `/annotation-search/scenes/${encodeURIComponent(sceneId)}?${p.toString()}`,
+  );
+}
+
+export function suggestAnnotation(
+  query: string,
+): Promise<{ query: string; suggestion: SearchSuggestion | null }> {
+  const p = new URLSearchParams();
+  p.set('query', query);
+  return _do(`/annotation-search/suggest?${p.toString()}`);
+}
