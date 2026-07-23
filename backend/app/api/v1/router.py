@@ -72,7 +72,6 @@ api_router.include_router(community_likes.router)
 api_router.include_router(community_follows.router)
 api_router.include_router(community_notifications.router)
 api_router.include_router(community_playbooks.router)
-api_router.include_router(mm_router.router)
 api_router.include_router(admin.router)
 api_router.include_router(metrics_router)
 

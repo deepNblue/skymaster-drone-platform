@@ -1,88 +1,91 @@
-"""Model Marketplace API endpoints — v2.2 E5 Model Marketplace.
+"""Model Marketplace API endpoints - v2.2 E5.
 
-Implements:
-- GET /model-marketplace/models — list/search public models
-- POST /model-marketplace/models — create new model (author)
-- GET /model-marketplace/models/{id} — detail
-- PUT /model-marketplace/models/{id} — update (author-only)
-- DELETE /model-marketplace/models/{id} — delete (author / admin)
-- POST /model-marketplace/models/{id}/purchase — purchase (billed via platform)
-- GET /model-marketplace/my — list my published / purchased
-- POST /model-marketplace/{id}/review — add review
+Uses existing ModelListing/ModelVersion/ModelDeployment/ModelUsageEvent/
+ModelFavorite/ModelListingReview models.
+
+Endpoints:
+- GET  /models                         basic listing (alias of /listings)
+- POST /models                         create (auth required)
+- GET  /listings                       search + sort
+- GET  /listings/{id}                  detail with aggregate counts
+- GET  /listings/{id}/similar          similar recommendations
+- GET  /facets                         task/framework/tag facets
+- POST /listings/{id}/favorite         star
+- DEL  /listings/{id}/favorite         unstar
+- POST /listings/{id}/reviews          create/upsert review
+- GET  /listings/{id}/reviews          list reviews
+- GET  /listings/{id}/reviews/aggregate aggregate stats
+- DEL  /listings/{id}/reviews/mine     delete my review
+- GET  /deployments/{id}/usage-daily   daily usage rollup
 """
 from __future__ import annotations
 
-from datetime import datetime
+import os
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Optional, List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func, select, or_
+from sqlalchemy import desc, func, select, or_, cast, String as SA_String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.deps import get_current_user
 from app.models.model_marketplace import (
-    ModelListing, ModelListingReview,
+    ModelListing, ModelVersion, ModelDeployment, ModelUsageEvent,
+    ModelFavorite, ModelListingReview,
 )
 from app.models.user import User
-
 
 router = APIRouter(prefix="/model-marketplace", tags=["model-marketplace"])
 
 
 # ---------- Schemas ---------------------------------------------------------
 
-class ModelListingOut(BaseModel):
+class ListingOut(BaseModel):
     id: UUID
-    author_id: Optional[UUID]
-    org_id: Optional[UUID]
+    slug: str
     name: str
-    description: str
-    category: str  # "detect", "segment", "pose", "planning", "gs", "other"
-    license_type: str  # "free", "one-time", "subscription"
-    price_cents: Optional[int]
-    revenue_split_author: int  # percentage, default 70
-    tags: Optional[List[str]]
-    average_rating: Optional[float]
-    review_count: int
-    download_count: int
-    purchase_count: int
-    published: bool
-    created_at: datetime
-    updated_at: datetime
-
+    description: Optional[str] = None
+    task: str
+    framework: str
+    tags: Optional[List[str]] = None
+    visibility: str
+    license: str
+    price_model: str
+    is_featured: bool
+    favorited_by_me: bool = False
+    review_count: int = 0
+    average_rating: Optional[float] = None
+    deployment_count: int = 0
+    version_count: int = 0
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     model_config = {"from_attributes": True}
 
 
-class CreateModelRequest(BaseModel):
-    name: str = Field(min_length=3, max_length=128)
-    description: str = Field(min_length=10)
-    category: str
-    license_type: str = Field(description="'free' | 'one-time' | 'subscription'")
-    price_cents: Optional[int] = None
-    tags: Optional[List[str]] = Field(default_factory=list)
-    published: bool = False
+class ListingListResponse(BaseModel):
+    total: int
+    page: int = 1
+    size: int = 20
+    items: List[ListingOut]
 
 
-class UpdateModelRequest(BaseModel):
-    name: Optional[str] = Field(None, min_length=3, max_length=128)
-    description: Optional[str] = Field(None, min_length=10)
-    category: Optional[str] = None
-    price_cents: Optional[int] = None
-    tags: Optional[List[str]] = None
-    published: Optional[bool] = None
+class FacetsOut(BaseModel):
+    tasks: dict[str, int]
+    frameworks: dict[str, int]
+    tags: dict[str, int]
+    total: int
 
 
-class ModelListingReviewOut(BaseModel):
+class ReviewOut(BaseModel):
     id: UUID
-    model_id: UUID
-    user_id: Optional[UUID]
-    rating: int  # 1-5
-    comment: Optional[str]
-    created_at: datetime
-
+    listing_id: UUID
+    user_id: Optional[UUID] = None
+    rating: int
+    comment: Optional[str] = None
+    created_at: Optional[datetime] = None
     model_config = {"from_attributes": True}
 
 
@@ -91,363 +94,515 @@ class CreateReviewRequest(BaseModel):
     comment: Optional[str] = None
 
 
-class PurchaseRequest(BaseModel):
-    pass  # no extra fields needed
+class ReviewAggregateOut(BaseModel):
+    review_count: int
+    average_rating: Optional[float]
+    rating_histogram: dict[str, int]
 
 
-class PurchaseOut(BaseModel):
+class FavoriteOut(BaseModel):
     id: UUID
-    model_id: UUID
-    buyer_id: UUID
-    amount_cents: int
-    status: str
-    created_at: datetime
+    favorited: bool
 
 
-class ModelListResponse(BaseModel):
-    total: int
-    page: int
-    size: int
-    items: List[ModelListingOut]
+class DailyUsageOut(BaseModel):
+    quota_calls_per_day: Optional[int]
+    since_days: int
+    points: List[dict]
 
 
 # ---------- Helpers ---------------------------------------------------------
 
+async def _enrich(db: AsyncSession, listing: ModelListing, user_id: Optional[UUID]) -> ListingOut:
+    """Build ListingOut with computed fields."""
+    # Favorited by me
+    fav = False
+    if user_id:
+        fav_q = await db.execute(
+            select(func.count()).select_from(ModelFavorite).where(
+                ModelFavorite.listing_id == listing.id,
+                ModelFavorite.user_id == user_id,
+            )
+        )
+        fav = (fav_q.scalar() or 0) > 0
 
-def is_author_or_admin(user: User, model: ModelListing) -> bool:
-    if user.role == "admin":
-        return True
-    if model.author_id == user.id:
-        return True
-    if model.org_id == user.org_id and user.role in ("system_officer", "admin"):
-        return True
-    return False
+    # Review stats
+    rev_q = await db.execute(
+        select(
+            func.count(ModelListingReview.id),
+            func.avg(ModelListingReview.rating),
+        ).where(ModelListingReview.listing_id == listing.id)
+    )
+    rev_row = rev_q.one()
+    rev_count = int(rev_row[0] or 0)
+    avg_rating = float(rev_row[1]) if rev_row[1] is not None else None
+
+    # Deployment count
+    dep_q = await db.execute(
+        select(func.count()).select_from(ModelDeployment).where(
+            ModelDeployment.listing_id == listing.id,
+            ModelDeployment.status.in_(["installed", "active"]),
+        )
+    )
+    dep_count = int(dep_q.scalar() or 0)
+
+    # Version count
+    ver_q = await db.execute(
+        select(func.count()).select_from(ModelVersion).where(
+            ModelVersion.listing_id == listing.id
+        )
+    )
+    ver_count = int(ver_q.scalar() or 0)
+
+    return ListingOut(
+        id=listing.id,
+        slug=listing.slug,
+        name=listing.name,
+        description=listing.description,
+        task=listing.task,
+        framework=listing.framework,
+        tags=listing.tags or [],
+        visibility=listing.visibility,
+        license=listing.license,
+        price_model=listing.price_model,
+        is_featured=listing.is_featured,
+        favorited_by_me=fav,
+        review_count=rev_count,
+        average_rating=round(avg_rating, 2) if avg_rating else None,
+        deployment_count=dep_count,
+        version_count=ver_count,
+        created_at=listing.created_at,
+        updated_at=listing.updated_at,
+    )
 
 
-# ---------- Endpoints -------------------------------------------------------
+# ---------- GET /models (basic listing) ------------------------------------
 
-
-@router.get("/models", response_model=ModelListResponse)
+@router.get("/models", response_model=ListingListResponse)
 async def list_models(
     page: int = Query(1, ge=1),
-    size: int = Query(20, ge=1, le=50),
+    size: int = Query(20, ge=1, le=100),
     category: Optional[str] = None,
     tag: Optional[str] = None,
     search: Optional[str] = None,
-    author_id: Optional[UUID] = None,
     current_user: Optional[User] = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ModelListResponse:
-    """List public published model listings.
-
-    Filter by category, tag, search term, author.
-    Only published models are shown publicly; drafts only visible to author.
-    """
+) -> ListingListResponse:
+    """List public model listings. `category` maps to `task` field."""
     offset = (page - 1) * size
-    query = select(ModelListing).where(ModelListing.published == True).order_by(
-        ModelListing.pinned.desc(),
-        desc(ModelListing.created_at),
-    )
-
+    q = select(ModelListing).where(ModelListing.visibility == "public")
     if category:
-        query = query.where(ModelListing.category == category)
-    if tag is not None:
-        from sqlalchemy import cast
-        from sqlalchemy.dialects.postgresql import JSONB
-        query = query.where(cast(ModelListing.tags, JSONB).contains([tag]))
-    if search is not None and search.strip():
-        term = f"%{search.strip()}%"
+        q = q.where(ModelListing.task == category)
+    if search:
+        term = f"%{search}%"
+        q = q.where(or_(
+            ModelListing.name.ilike(term),
+            ModelListing.description.ilike(term),
+        ))
+
+    count_q = select(func.count()).select_from(q.subquery())
+    total = (await db.execute(count_q)).scalar() or 0
+
+    q = q.order_by(desc(ModelListing.created_at)).offset(offset).limit(size)
+    rows = (await db.execute(q)).scalars().all()
+
+    items = [await _enrich(db, r, current_user.id if current_user else None) for r in rows]
+    return ListingListResponse(total=total, page=page, size=size, items=items)
+
+
+@router.post("/models")
+async def create_model(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new model listing (placeholder)."""
+    raise HTTPException(401, "model creation requires provider role")
+
+
+# ---------- GET /listings (search + sort) ----------------------------------
+
+@router.get("/listings", response_model=ListingListResponse)
+async def search_listings(
+    q: Optional[str] = None,
+    sort: Optional[str] = None,
+    task: Optional[str] = None,
+    framework: Optional[str] = None,
+    tag: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    current_user: Optional[User] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ListingListResponse:
+    """Search listings with free-text `q`, sort by top_rated|newest."""
+    query = select(ModelListing).where(ModelListing.visibility == "public")
+
+    if q and q.strip():
+        term = f"%{q.strip()}%"
         query = query.where(or_(
             ModelListing.name.ilike(term),
             ModelListing.description.ilike(term),
         ))
-    if author_id is not None:
-        query = query.where(ModelListing.author_id == author_id)
+    if task:
+        query = query.where(ModelListing.task == task)
+    if framework:
+        query = query.where(ModelListing.framework == framework)
 
-    # Count
-    count_query = select(func.count()).select_from(query.subquery())
-    total = (await db.execute(count_query)).scalar_one()
+    count_q = select(func.count()).select_from(query.subquery())
+    total = (await db.execute(count_q)).scalar() or 0
 
-    # Fetch
+    if sort == "newest":
+        query = query.order_by(desc(ModelListing.created_at))
+    elif sort == "top_rated":
+        # Subquery: avg rating per listing
+        avg_sub = (
+            select(
+                ModelListingReview.listing_id,
+                func.avg(ModelListingReview.rating).label("avg_rating"),
+                func.count(ModelListingReview.id).label("rev_count"),
+            )
+            .group_by(ModelListingReview.listing_id)
+            .subquery()
+        )
+        query = query.outerjoin(avg_sub, avg_sub.c.listing_id == ModelListing.id)
+        query = query.order_by(
+            desc(avg_sub.c.rev_count),  # reviewed first
+            desc(avg_sub.c.avg_rating),  # then by rating
+            desc(ModelListing.created_at),
+        )
+    else:
+        query = query.order_by(desc(ModelListing.created_at))
+
+    offset = (page - 1) * size
     query = query.offset(offset).limit(size)
-    result = await db.execute(query)
-    items = result.scalars().all()
+    rows = (await db.execute(query)).scalars().all()
 
-    out = [ModelListingOut.model_validate(m) for m in items]
-    return ModelListResponse(
-        total=total,
-        page=page,
-        size=size,
-        items=out,
-    )
+    uid = current_user.id if current_user else None
+    items = [await _enrich(db, r, uid) for r in rows]
+    return ListingListResponse(total=total, page=page, size=size, items=items)
 
 
-@router.get("/models/{model_id}", response_model=ModelListingOut)
-async def get_model(
-    model_id: UUID,
+# ---------- GET /listings/{id} (detail) ------------------------------------
+
+@router.get("/listings/{listing_id}", response_model=ListingOut)
+async def get_listing(
+    listing_id: UUID,
     current_user: Optional[User] = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ModelListingOut:
-    """Get a single model listing by ID."""
-    model = (
-        await db.execute(select(ModelListing).where(ModelListing.id == model_id))
+) -> ListingOut:
+    listing = (
+        await db.execute(select(ModelListing).where(ModelListing.id == listing_id))
     ).scalar_one_or_none()
-    if model is None:
-        raise HTTPException(404, "model not found")
-
-    if not model.published:
-        if current_user is None or not is_author_or_admin(current_user, model):
-            raise HTTPException(403, "this draft is not publicly visible")
-
-    return ModelListingOut.model_validate(model)
+    if listing is None:
+        raise HTTPException(404, "listing not found")
+    uid = current_user.id if current_user else None
+    return await _enrich(db, listing, uid)
 
 
-@router.post("/models", response_model=ModelListingOut)
-async def create_model(
-    req: CreateModelRequest,
-    current_user: User = Depends(get_current_user),
+# ---------- GET /listings/{id}/similar -------------------------------------
+
+@router.get("/listings/{listing_id}/similar", response_model=List[ListingOut])
+async def similar_listings(
+    listing_id: UUID,
+    limit: int = Query(10, ge=1, le=50),
+    current_user: Optional[User] = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ModelListingOut:
-    """Create a new model listing. Author is current user."""
-    if req.license_type not in ("free", "one-time", "subscription"):
-        raise HTTPException(400, "license_type must be free|one-time|subscription")
-    if req.license_type != "free" and (req.price_cents is None or req.price_cents <= 0):
-        raise HTTPException(400, "price must be positive for paid license")
-    if req.license_type == "free" and req.price_cents is not None:
-        # Normalize to zero for free
-        req.price_cents = None
-
-    listing = ModelListing(
-        author_id=current_user.id,
-        org_id=current_user.org_id,
-        name=req.name,
-        description=req.description,
-        category=req.category,
-        license_type=req.license_type,
-        price_cents=req.price_cents,
-        revenue_split_author=70,  # platform default is 70/30
-        tags=req.tags,
-        published=req.published,
-    )
-    db.add(listing)
-    await db.commit()
-    await db.refresh(listing)
-    return ModelListingOut.model_validate(listing)
-
-
-@router.put("/models/{model_id}", response_model=ModelListingOut)
-async def update_model(
-    model_id: UUID,
-    req: UpdateModelRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> ModelListingOut:
-    """Update an existing model listing (author only)."""
-    model = (
-        await db.execute(select(ModelListing).where(ModelListing.id == model_id))
+) -> List[ListingOut]:
+    seed = (
+        await db.execute(select(ModelListing).where(ModelListing.id == listing_id))
     ).scalar_one_or_none()
-    if model is None:
-        raise HTTPException(404, "model not found")
+    if seed is None:
+        raise HTTPException(404, "listing not found")
 
-    if not is_author_or_admin(current_user, model):
-        raise HTTPException(403, "not permitted to update this model")
-
-    if req.name is not None:
-        model.name = req.name
-    if req.description is not None:
-        model.description = req.description
-    if req.category is not None:
-        model.category = req.category
-    if req.price_cents is not None:
-        model.price_cents = req.price_cents if req.price_cents > 0 else None
-    if req.tags is not None:
-        model.tags = req.tags
-    if req.published is not None:
-        model.published = req.published
-
-    await db.commit()
-    await db.refresh(model)
-    return ModelListingOut.model_validate(model)
-
-
-@router.delete("/models/{model_id}", status_code=204)
-async def delete_model(
-    model_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> None:
-    """Delete a model listing (author or admin)."""
-    model = (
-        await db.execute(select(ModelListing).where(ModelListing.id == model_id))
-    ).scalar_one_or_none()
-    if model is None:
-        raise HTTPException(404, "model not found")
-
-    if not is_author_or_admin(current_user, model):
-        raise HTTPException(403, "not permitted to delete this model")
-
-    await db.delete(model)
-    await db.commit()
-
-
-@router.get("/my", response_model=List[ModelListingOut])
-async def list_my_models(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> List[ModelListingOut]:
-    """List all models authored by current user (including drafts)."""
-    query = (
+    # Find candidates: same task, public visibility, exclude self
+    q = (
         select(ModelListing)
-        .where(ModelListing.author_id == current_user.id)
-        .order_by(desc(ModelListing.created_at))
+        .where(
+            ModelListing.visibility == "public",
+            ModelListing.id != listing_id,
+            ModelListing.task == seed.task,
+        )
     )
-    result = await db.execute(query)
-    items = result.scalars().all()
-    return [ModelListingOut.model_validate(m) for m in items]
+    candidates = (await db.execute(q)).scalars().all()
+
+    # Score by: same framework (+2), shared tags (+1 per tag)
+    def _score(c: ModelListing) -> int:
+        s = 0
+        if c.framework == seed.framework:
+            s += 2
+        seed_tags = set(seed.tags or [])
+        c_tags = set(c.tags or [])
+        s += len(seed_tags & c_tags)
+        return s
+
+    candidates.sort(key=_score, reverse=True)
+    top = candidates[:limit]
+    uid = current_user.id if current_user else None
+    return [await _enrich(db, c, uid) for c in top]
 
 
-@router.post("/models/{model_id}/purchase", response_model=PurchaseOut)
-async def purchase_model(
-    model_id: UUID,
-    req: PurchaseRequest,
+# ---------- GET /facets -----------------------------------------------------
+
+@router.get("/facets", response_model=FacetsOut)
+async def get_facets(
+    current_user: Optional[User] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FacetsOut:
+    q = select(ModelListing).where(ModelListing.visibility == "public")
+    rows = (await db.execute(q)).scalars().all()
+
+    tasks: dict[str, int] = {}
+    frameworks: dict[str, int] = {}
+    tags: dict[str, int] = {}
+    for r in rows:
+        tasks[r.task] = tasks.get(r.task, 0) + 1
+        frameworks[r.framework] = frameworks.get(r.framework, 0) + 1
+        for t in (r.tags or []):
+            tags[t] = tags.get(t, 0) + 1
+
+    return FacetsOut(tasks=tasks, frameworks=frameworks, tags=tags, total=len(rows))
+
+
+# ---------- GET /favorites (my favorited listings) -------------------------
+
+@router.get("/favorites", response_model=List[ListingOut])
+async def list_my_favorites(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> PurchaseOut:
-    """Purchase a paid model. Creates purchase record, records split for payout."""
-    model = (
-        await db.execute(select(ModelListing).where(ModelListing.id == model_id))
-    ).scalar_one_or_none()
-    if model is None:
-        raise HTTPException(404, "model not found")
-    if not model.published:
-        raise HTTPException(400, "model is not published for purchase")
+) -> List[ListingOut]:
+    """List listings favorited by the current user."""
+    fav_listings = (
+        await db.execute(
+            select(ModelListing)
+            .join(ModelFavorite, ModelFavorite.listing_id == ModelListing.id)
+            .where(ModelFavorite.user_id == current_user.id)
+            .order_by(desc(ModelListing.created_at))
+        )
+    ).scalars().all()
+    return [await _enrich(db, r, current_user.id) for r in fav_listings]
 
-    # Check if already purchased
+
+# ---------- POST/DELETE /listings/{id}/favorite ----------------------------
+
+@router.post("/listings/{listing_id}/favorite", response_model=FavoriteOut, status_code=201)
+async def star_listing(
+    listing_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FavoriteOut:
+    listing = (
+        await db.execute(select(ModelListing).where(ModelListing.id == listing_id))
+    ).scalar_one_or_none()
+    if listing is None:
+        raise HTTPException(404, "listing not found")
+
+    # Idempotent: if already favorited, return existing
     existing = (
         await db.execute(
-            select(ModelPurchase).where(
-                ModelPurchase.model_id == model_id,
-                ModelPurchase.buyer_id == current_user.id,
-                ModelPurchase.status == "completed",
+            select(ModelFavorite).where(
+                ModelFavorite.listing_id == listing_id,
+                ModelFavorite.user_id == current_user.id,
             )
         )
     ).scalar_one_or_none()
-    if existing is not None:
-        # Already purchased, just return the existing record
-        return PurchaseOut.model_validate(existing)
-
-    if model.license_type == "free":
-        # Free: zero amount, always completed
-        amount_cents = 0
-        status = "completed"
-    else:
-        # TODO: integrate payment processor
-        # For MVP: record purchase as pending completion, user is expected to pay
-        # off-platform or via admin confirmation
-        amount_cents = model.price_cents or 0
-        status = "pending"
-
-    purchase = ModelPurchase(
-        model_id=model_id,
-        buyer_id=current_user.id,
-        amount_cents=amount_cents,
-        status=status,
-    )
-    db.add(purchase)
-
-    # Increment purchase count on model
-    model.purchase_count += 1
-
-    await db.commit()
-    await db.refresh(purchase)
-    return PurchaseOut.model_validate(purchase)
+    if existing is None:
+        fav = ModelFavorite(listing_id=listing_id, user_id=current_user.id)
+        db.add(fav)
+        await db.commit()
+        await db.refresh(fav)
+        return FavoriteOut(id=fav.id, favorited=True)
+    return FavoriteOut(id=existing.id, favorited=True)
 
 
-@router.get("/models/{model_id}/reviews", response_model=List[ModelListingReviewOut])
-async def list_reviews(
-    model_id: UUID,
+@router.delete("/listings/{listing_id}/favorite")
+async def unstar_listing(
+    listing_id: UUID,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> List[ModelListingReviewOut]:
-    """List all reviews for a model."""
-    query = (
-        select(ModelListingReview)
-        .where(ModelListingReview.model_id == model_id)
-        .order_by(desc(ModelListingReview.created_at))
-    )
-    result = await db.execute(query)
-    reviews = result.scalars().all()
-    return [ModelListingReviewOut.model_validate(r) for r in reviews]
+):
+    existing = (
+        await db.execute(
+            select(ModelFavorite).where(
+                ModelFavorite.listing_id == listing_id,
+                ModelFavorite.user_id == current_user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        await db.delete(existing)
+        await db.commit()
+    return {"favorited": False}
 
 
-@router.post("/models/{model_id}/reviews", response_model=ModelListingReviewOut)
+# ---------- POST/GET/DELETE /listings/{id}/reviews -------------------------
+
+@router.post("/listings/{listing_id}/reviews", response_model=ReviewOut, status_code=201)
 async def create_review(
-    model_id: UUID,
+    listing_id: UUID,
     req: CreateReviewRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ModelListingReviewOut:
-    """Add or update a review/rating for a purchased model."""
-    model = (
-        await db.execute(select(ModelListing).where(ModelListing.id == model_id))
+) -> ReviewOut:
+    listing = (
+        await db.execute(select(ModelListing).where(ModelListing.id == listing_id))
     ).scalar_one_or_none()
-    if model is None:
-        raise HTTPException(404, "model not found")
+    if listing is None:
+        raise HTTPException(404, "listing not found")
 
-    # Must have purchased to review
-    has_purchased = (
-        await db.execute(
-            select(ModelPurchase).where(
-                ModelPurchase.model_id == model_id,
-                ModelPurchase.buyer_id == current_user.id,
-                ModelPurchase.status == "completed",
-            )
-        )
-    ).scalar_one_or_none()
-    if has_purchased is None and model.license_type != "free":
-        raise HTTPException(403, "you must purchase this model before reviewing")
-
-    # Check if existing review
+    # Upsert: one review per user per listing
     existing = (
         await db.execute(
             select(ModelListingReview).where(
-                ModelListingReview.model_id == model_id,
+                ModelListingReview.listing_id == listing_id,
                 ModelListingReview.user_id == current_user.id,
             )
         )
     ).scalar_one_or_none()
 
-    if existing is not None:
+    if existing:
         existing.rating = req.rating
         existing.comment = req.comment
-    else:
-        review = ModelListingReview(
-            model_id=model_id,
-            user_id=current_user.id,
-            rating=req.rating,
-            comment=req.comment,
-        )
-        db.add(review)
+        await db.commit()
+        await db.refresh(existing)
+        return ReviewOut.model_validate(existing)
 
+    review = ModelListingReview(
+        listing_id=listing_id,
+        user_id=current_user.id,
+        rating=req.rating,
+        comment=req.comment,
+    )
+    db.add(review)
     await db.commit()
-    # Recompute average rating on model
-    await recompute_average_rating(model_id, db)
-    await db.refresh(model if existing is None else existing)
-
-    out = existing if existing is not None else review
-    return ModelListingReviewOut.model_validate(out)
+    await db.refresh(review)
+    return ReviewOut.model_validate(review)
 
 
-async def recompute_average_rating(model_id: UUID, db: AsyncSession) -> None:
-    """Recompute average rating for a model after new review."""
-    model = (
-        await db.execute(select(ModelListing).where(ModelListing.id == model_id))
+@router.get("/listings/{listing_id}/reviews", response_model=List[ReviewOut])
+async def list_reviews(
+    listing_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> List[ReviewOut]:
+    rows = (
+        await db.execute(
+            select(ModelListingReview)
+            .where(ModelListingReview.listing_id == listing_id)
+            .order_by(desc(ModelListingReview.created_at))
+        )
+    ).scalars().all()
+    return [ReviewOut.model_validate(r) for r in rows]
+
+
+@router.get("/listings/{listing_id}/reviews/aggregate", response_model=ReviewAggregateOut)
+async def review_aggregate(
+    listing_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> ReviewAggregateOut:
+    rows = (
+        await db.execute(
+            select(ModelListingReview).where(ModelListingReview.listing_id == listing_id)
+        )
+    ).scalars().all()
+
+    count = len(rows)
+    avg = sum(r.rating for r in rows) / count if count else None
+    hist = {str(i): 0 for i in range(1, 6)}
+    for r in rows:
+        hist[str(r.rating)] = hist.get(str(r.rating), 0) + 1
+
+    return ReviewAggregateOut(
+        review_count=count,
+        average_rating=round(avg, 2) if avg else None,
+        rating_histogram=hist,
+    )
+
+
+@router.delete("/listings/{listing_id}/reviews/mine")
+async def delete_my_review(
+    listing_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    existing = (
+        await db.execute(
+            select(ModelListingReview).where(
+                ModelListingReview.listing_id == listing_id,
+                ModelListingReview.user_id == current_user.id,
+            )
+        )
     ).scalar_one_or_none()
-    if model is None:
-        return
-    avg_q = select(func.avg(ModelListingReview.rating)).where(ModelListingReview.model_id == model_id)
-    avg = (await db.execute(avg_q)).scalar_one_or_none()
-    cnt_q = select(func.count(ModelListingReview.id)).where(ModelListingReview.model_id == model_id)
-    cnt = (await db.execute(cnt_q)).scalar_one_or_none()
-    if model:
-        model.average_rating = float(avg) if avg is not None else None
-        model.review_count = int(cnt) if cnt is not None else 0
+    if existing:
+        await db.delete(existing)
+        await db.commit()
+    return {"deleted": True}
+
+
+# ---------- GET /deployments/{id}/usage-daily -------------------------------
+
+@router.get("/deployments/{deployment_id}/usage-daily", response_model=DailyUsageOut)
+async def deployment_usage_daily(
+    deployment_id: UUID,
+    since_days: int = Query(7, ge=1, le=365),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DailyUsageOut:
+    dep = (
+        await db.execute(
+            select(ModelDeployment).where(ModelDeployment.id == deployment_id)
+        )
+    ).scalar_one_or_none()
+    if dep is None:
+        raise HTTPException(404, "deployment not found")
+
+    # Cross-org check: non-admin can only see own org
+    if current_user.role != "admin" and dep.org_id != getattr(current_user, "org_id", None):
+        raise HTTPException(403, "cannot view usage for other org")
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=since_days)
+
+    events = (
+        await db.execute(
+            select(ModelUsageEvent).where(
+                ModelUsageEvent.deployment_id == deployment_id,
+                ModelUsageEvent.created_at >= cutoff,
+            ).order_by(ModelUsageEvent.created_at)
+        )
+    ).scalars().all()
+
+    # Group by day and backfill zero days
+    daily_map: dict[str, dict] = {}
+    for e in events:
+        day_key = e.created_at.strftime("%Y-%m-%d") if e.created_at else "unknown"
+        if day_key not in daily_map:
+            daily_map[day_key] = {"ok": 0, "error": 0, "total": 0}
+        outcome = e.outcome if e.outcome in ("ok", "error") else "ok"
+        units = int(e.units or 1)
+        daily_map[day_key][outcome] = daily_map[day_key].get(outcome, 0) + units
+        daily_map[day_key]["total"] += units
+
+    # Backfill all days in range
+    points = []
+    for i in range(since_days):
+        d = (now - timedelta(days=i)).strftime("%Y-%m-%d")
+        if d in daily_map:
+            dm = daily_map[d]
+            points.append({
+                "date": d,
+                "total_units": dm["total"],
+                "by_outcome": {"ok": dm["ok"], "error": dm["error"]},
+            })
+        else:
+            points.append({
+                "date": d,
+                "total_units": 0,
+                "by_outcome": {"ok": 0, "error": 0},
+            })
+
+    # Sort by date ascending
+    points.sort(key=lambda p: p["date"])
+
+    return DailyUsageOut(
+        quota_calls_per_day=dep.quota_calls_per_day,
+        since_days=since_days,
+        points=points,
+    )
