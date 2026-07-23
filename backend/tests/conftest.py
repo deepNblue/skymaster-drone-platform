@@ -14,7 +14,7 @@ import os
 # on DATABASE_URL. See tests/test_admin.py for reference.
 os.environ.setdefault(
     "DATABASE_URL",
-    "sqlite+aiosqlite:///:memory:",
+    "sqlite+aiosqlite:////tmp/skymaster_test.db",
 )
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("JWT_SECRET", "test-secret-do-not-use-in-prod")
@@ -181,4 +181,25 @@ async def client() -> AsyncClient:
         transport=transport, base_url="http://testserver"
     ) as ac:
         async with app.router.lifespan_context(app):
+            # Clean all data from previous test (file-based SQLite persists)
+            if "sqlite" in str(engine.url) and "skymaster_test" in str(engine.url):
+                from sqlalchemy import text
+                async with engine.begin() as conn:
+                    for t in reversed(Base.metadata.sorted_tables):
+                        try:
+                            await conn.execute(text(f'DELETE FROM "{t.name}"'))
+                        except Exception:
+                            pass
+
+            # Ensure redis mock exists on app.state for tests that don't
+            # have a real Redis connection (vision_stream tests etc.)
+            if not hasattr(app.state, "redis") or app.state.redis is None:
+                from unittest.mock import AsyncMock, MagicMock
+                app.state.redis = MagicMock()
+                app.state.redis.publish = AsyncMock(return_value=1)
+                app.state.redis.get = AsyncMock(return_value=None)
+                app.state.redis.set = AsyncMock(return_value=True)
+                app.state.redis.delete = AsyncMock(return_value=1)
+                app.state.redis.expire = AsyncMock(return_value=True)
+                app.state.redis.close = AsyncMock()
             yield ac
