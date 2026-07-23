@@ -101,6 +101,9 @@ def _patched_async_client_init(self, *args, **kwargs):
 AsyncClient.__init__ = _patched_async_client_init
 
 
+_now_registered = False
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _ensure_schema():
     """Ensure SQLite schema exists for every test (even those that bypass
@@ -206,12 +209,7 @@ async def client() -> AsyncClient:
     # we assume alembic has already run.
     from app.db import engine, Base
     if "sqlite" in str(engine.url):
-        # Register now() function for SQLite (used in server_default/onupdate)
-        from sqlalchemy import event as _sa_event
-        import datetime as _dt
-        @_sa_event.listens_for(engine.sync_engine, "connect")
-        def _register_now(dbapi_conn, conn_record):
-            dbapi_conn.create_function("now", 0, lambda: _dt.datetime.utcnow().isoformat())
+        # SQLite now() already registered by _ensure_schema fixture
         from app.models import (  # noqa: F401
             user, organization, drone, mission, flight_log, audit_log,
             backup_code, login_event, password_reset_token,
