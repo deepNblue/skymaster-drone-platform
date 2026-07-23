@@ -1,10 +1,10 @@
 # SkyMaster 无人机统一管控平台 · 产品规格书
 
-- **版本**：v1.1-draft
-- **日期**：2026-07-08
-- **状态**：草案（待评审，v1.1 已纳入 6 项改进意见）
-- **对标基线**：大疆司空 2 (DJI FlightHub 2) + QGroundControl + Auterion Suite
-- **核心定位**：**自有、开源、私有化部署的多协议无人机统一管控平台**，覆盖司空 2 全部核心能力，并向 PX4 / ArduPilot / DJI / 国产飞控多阵营兼容
+  - **版本**：v2.3-draft
+  - **日期**：2026-07-21
+  - **状态**：草案（v2.3 TaaS + AAS + 第三方开放全部 API 和前端开发完成，待评审）
+ - **对标基线**：大疆司空 2 (DJI FlightHub 2) + QGroundControl + Auterion Suite
+ - **核心定位**：**自有、开源、私有化部署的多协议无人机统一管控平台**，覆盖司空 2 全部核心能力，并向 PX4 / ArduPilot / DJI / 国产飞控多阵营兼容
 
 ---
 
@@ -378,13 +378,28 @@ FlightApproval {
 - 增值：GPU 训练时按分钟计费；托管渲染按流量计费
 - 私有部署：一次性 License + 年度维护
 
-#### 3.15.4 技术要求
-- GPU 集群（A100/H100 或国产 910B）
-- 训练流水线：入库 → 预处理 → 稀疏重建 → 稠密重建 → GS 训练 → 发布
-- 单场景 3DGS 训练时长 P95 < 30 分钟（1000 张图 @ A100×1）
-- 支持渐进式加载与 LOD
+ #### 3.15.4 技术要求
+ - GPU 集群（A100/H100 或国产 910B）
+ - 训练流水线：入库 → 预处理 → 稀疏重建 → 稠密重建 → GS 训练 → 发布
+ - 单场景 3DGS 训练时长 P95 < 30 分钟（1000 张图 @ A100×1）
+ - 支持渐进式加载与 LOD
+ - 可插拔执行器架构：支持原生/ docker 两种运行模式，环境配置不侵入主代码
 
-### 3.16 AI 感知模块（Vision AI）
+ #### 3.15.5 当前已实现功能
+ | 功能 | 交付状态 |
+ |---|---|
+ | 数据模型（Scene3DGS + SceneAsset） | ✅ 完成 |
+ | REST API (CRUD + 分块上传 + 进度 SSE) | ✅ 完成 |
+ | 前端页面（列表 + 详情 + 新建弹窗 + 资产上传） | ✅ 完成 |
+ | 可插拔执行器协议 + NoOp 开发测试实现 | ✅ 完成 |
+ | COLMAP 稀疏重建执行器（原生/docker） | ✅ 完成 |
+ | Gsplat 3DGS 训练执行器 | ✅ 完成 |
+ | 4DGS 动态时序重建执行器 | ✅ 完成 |
+ | 状态机自动推进 + SSE 实时进度推送 | ✅ 完成 |
+ | 从 Mission 飞行任务一键导入影像（E3.4） | ⏳ 待实现 |
+ | WebGL three.js 在线预览（E3.3） | ⏳ 待实现 |
+
+ ### 3.16 AI 感知模块（Vision AI）
 
 > **定位**：从 3.7 节 Insight 升级为**独立业务域**，覆盖检测/识别/跟踪/分割/异常检测全谱系。
 
@@ -492,15 +507,42 @@ FlightApproval {
 - 版权：作者签署 CLA，用户签署 EULA
 - 安全：所有上传模型入沙箱 + 静态扫描（后门检测）
 
-#### 3.19.3 Training-as-a-Service
-- 支持任务类型：检测、分类、分割、跟踪、GS 重建
-- GPU 池：本地集群 + 混合云
-- 数据管道：从平台历史素材 → 自动生成弱标注 → 用户微调
-- 训练即服务 API 对外开放（对接第三方 MLOps）
+ #### 3.19.3 Training-as-a-Service
+ - 支持任务类型：检测、分类、分割、跟踪、GS 重建
+ - GPU 池：本地集群 + 混合云
+ - 数据管道：从平台历史素材 → 自动生成弱标注 → 用户微调
+ - 训练即服务 API 对外开放（对接第三方 MLOps）
+ - **v2.3 实现细节**:
+   - 数据库模型：`TrainingDataset` / `GPUNode` / `FineTuneJob` / `FineTuneMetric`
+   - 调度器：贪心算法，按剩余 VRAM 分配最早排队任务
+   - 节点协议：心跳 → 抢任务 → 上报指标 → 上报完成
+   - 前端：任务列表 + 实时损失曲线
+   - 闭环：训练完成一键发布到模型市场
+   - 参考 worker 实现在 `scripts/taas-gpu-worker/`
+
+ ### 3.20 飞行报备 — 城市属地模板化
+ **定位**: 解决不同城市报备要求不一致问题，模板化配置开箱即用。
+
+ **v2.3 实现**:
+ - 每个城市独立模板：可配置必填字段、标签、提交渠道、邮件模板
+ - 关键词匹配自动识别批复状态（同意/驳回）
+ - 后台轮询收件箱，自动更新报备状态
+ - 前端动态加载模板，生成对应表单
+ - 完整审计记录，所有批复存证
+
+ ### 3.21 第三方平台开放 API
+ **定位**: 第三方无人机平台（DJI/极飞/道通）可调用 SkyMaster 做报备，按次计费。
+
+ **v2.3 实现**:
+ - 租户模型：`ExternalTenant` + `ExternalApproval` + 月度配额计量
+ - 认证：AK/SK HMAC-SHA256
+ - 配额：月度限制，超额限流
+ - 计费：按次定价，月度账单
+ - Webhook：状态变更回调第三方
+ - 第三方用户无需登录 SkyMaster，流程完全对第三方透明
 
 
-
-## 4. 竞品分析（新增）
+ ## 4. 竞品分析（新增）
 
 ### 4.1 开源生态格局
 
@@ -530,15 +572,18 @@ FlightApproval {
 
 ### 4.3 与商业闭源产品对标
 
-| 能力 | 司空 2 | Auterion Suite | Skydio Cloud | SkyMaster |
-|---|---|---|---|---|
-| 私有化 | ❌ | ⚠️(付费) | ❌ | ✅ |
-| 多厂商 | ❌ | ⚠️(PX4 系) | ❌ | ✅ |
-| 开源 | ❌ | ❌ | ❌ | ✅ MIT |
-| DJI 机场 | ✅ | ❌ | ❌ | ✅ |
-| PX4 原生 | ❌ | ✅ | ❌ | ✅ |
-| 国密合规 | ❌ | ❌ | ❌ | ✅ |
-| AI 插件 | ⚠️ | ✅ | ✅ | ✅ |
+ | 能力 | 司空 2 | Auterion Suite | Skydio Cloud | SkyMaster |
+ |---|---|---|---|---|
+ | 私有化 | ❌ | ⚠️(付费) | ❌ | ✅ |
+ | 多厂商 | ❌ | ⚠️(PX4 系) | ❌ | ✅ |
+ | 开源 | ❌ | ❌ | ❌ | ✅ MIT |
+ | DJI 机场 | ✅ | ❌ | ❌ | ✅ |
+ | PX4 原生 | ❌ | ✅ | ❌ | ✅ |
+ | 国密合规 | ❌ | ❌ | ❌ | ✅ |
+ | AI 插件 | ⚠️ | ✅ | ✅ | ✅ |
+ | 一键微调训练服务 | ❌ | ❌ | ❌ | ✅ TaaS + 模型市场 |
+ | 多城市自动报备 | ❌ | ❌ | ❌ | ✅ 模板化 + 自动解析 |
+ | 第三方 API 开放 | ❌ | ❌ | ❌ | ✅ AK/SK + 按次计费 |
 
 ---
 
@@ -603,8 +648,10 @@ FlightApproval {
 | 任务规划 | 60% 地图 + 40% 玻璃参数面板 |
 | 实时监控 | 3×3 视频墙 + 遥测面板 |
 | 集群编队 | Three.js 编队 3D 视图 + 时间轴 |
-| 模型市场 | 卡片瀑布流 + hover 全息投影 |
-| Copilot | 右侧抽屉 + 紫色全息边框 + 打字机效果 |
+ | 模型市场 | 卡片瀑布流 + hover 全息投影 |
+ | Copilot | 右侧抽屉 + 紫色全息边框 + 打字机效果 |
+ | 3DGS 重建 | 网格卡片列表 + 进度条 + SSE 实时进度 |
+ | Copilot 任务链 | 网格列表 + 详情页完整操作 + 模态新建 |
 
 
 ### 6.3 基础设施
@@ -616,20 +663,25 @@ FlightApproval {
 
 ---
 
-## 7. 数据模型（核心实体）
+ ## 7. 数据模型（核心实体）
 
-| 实体 | 关键字段 | 说明 |
-|---|---|---|
-| Organization | id, name, tenant_type | 多租户根 |
-| User | id, org_id, role, sso_sub | 用户 |
-| Drone | id, sn, model, protocol, owner_id | 无人机 |
-| Dock | id, sn, location, drone_id | 机场 |
-| Mission | id, waypoints, template, status | 任务 |
-| FlightLog | id, mission_id, telemetry_series | 飞行日志（时序） |
-| MediaAsset | id, mission_id, type, minio_key | 媒体资产 |
-| Alert | id, drone_id, level, source | 告警 |
-| Geofence | id, geometry, type, tenant_id | 电子围栏 |
-| AuditLog | id, actor, action, resource | 审计日志（追加） |
+ | 实体 | 关键字段 | 说明 |
+ |---|---|---|
+ | Organization | id, name, tenant_type | 多租户根 |
+ | User | id, org_id, role, sso_sub | 用户 |
+ | Drone | id, sn, model, protocol, owner_id | 无人机 |
+ | Dock | id, sn, location, drone_id | 机场 |
+ | Mission | id, waypoints, template, status | 任务 |
+ | FlightLog | id, mission_id, telemetry_series | 飞行日志（时序） |
+ | MediaAsset | id, mission_id, type, minio_key | 媒体资产 |
+ | Alert | id, drone_id, level, source | 告警 |
+ | Geofence | id, geometry, type, tenant_id | 电子围栏 |
+ | AuditLog | id, actor, action, resource | 审计日志（追加） |
+ | CopilotTaskChain | id, org_id, name, status, steps, plan, reflection | Copilot 多步任务链 |
+ | CopilotTaskStep | id, chain_id, index, tool_name, status, result | 任务链单步 |
+ | CopilotMemory | id, org_id, memory_type, content_vector, created_at | Copilot 长期记忆库 |
+ | Scene3DGS | id, org_id, name, status, scene_kind, n_gaussians, psnr | 3DGS/4DGS 重建场景 |
+ | SceneAsset | id, scene_id, kind, storage_path, sha256 | 场景资产（源图/输出/日志）
 
 ---
 

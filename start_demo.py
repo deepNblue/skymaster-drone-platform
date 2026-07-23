@@ -7,8 +7,8 @@
 import os, subprocess, sys, time
 from pathlib import Path
 
-BACKEND = Path("/home/duoduo/projects/skymaster-drone-platform/backend-v0.1")
-FRONTEND = Path("/home/duoduo/projects/skymaster-drone-platform/frontend-v0.1")
+ BACKEND = Path("/home/duoduo/projects/skymaster-drone-platform/backend")
+ FRONTEND = Path("/home/duoduo/projects/skymaster-drone-platform/frontend")
 PY = str(BACKEND / ".venv/bin/python")
 NODE_BIN = os.path.expanduser("~/.nvm/versions/node/v20.20.1/bin")
 os.environ["PATH"] = f"{NODE_BIN}:{os.environ['PATH']}"

@@ -12,6 +12,7 @@ Implements:
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Optional, List
 from uuid import UUID
 
@@ -49,8 +50,8 @@ class ModelListingOut(BaseModel):
     download_count: int
     purchase_count: int
     published: bool
-    created_at: str
-    updated_at: str
+    created_at: datetime
+    updated_at: datetime
 
     model_config = {"from_attributes": True}
 
@@ -80,7 +81,7 @@ class ModelListingReviewOut(BaseModel):
     user_id: Optional[UUID]
     rating: int  # 1-5
     comment: Optional[str]
-    created_at: str
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 
@@ -100,7 +101,7 @@ class PurchaseOut(BaseModel):
     buyer_id: UUID
     amount_cents: int
     status: str
-    created_at: str
+    created_at: datetime
 
 
 class ModelListResponse(BaseModel):

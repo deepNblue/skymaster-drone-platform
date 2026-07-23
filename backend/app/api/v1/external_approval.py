@@ -65,7 +65,6 @@ async def check_quota(
     db: AsyncSession,
 ) -> bool:
     """Check if tenant has remaining quota for this month."""
-    from datetime import datetime
     year_month = f"{datetime.utcnow().year}-{datetime.utcnow().month:02d}"
     quota = (
         await db.execute(
@@ -136,7 +135,7 @@ class GetStatusResponse(BaseModel):
     external_id: str
     internal_status: Optional[str]
     last_webhook_sent: Optional[str]
-    created_at: str
+    created_at: datetime
 
 
 # ---------- Endpoints -------------------------------------------------------

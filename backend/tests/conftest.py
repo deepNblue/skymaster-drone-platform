@@ -203,3 +203,37 @@ async def client() -> AsyncClient:
                 app.state.redis.expire = AsyncMock(return_value=True)
                 app.state.redis.close = AsyncMock()
             yield ac
+
+
+@pytest_asyncio.fixture
+async def auth_client(client: AsyncClient) -> AsyncClient:
+    """A client with a pre-authenticated Bearer token.
+
+    Creates a test user, logs in, and sets the Authorization header
+    on the client so all subsequent requests are authenticated.
+    """
+    from app.db import engine
+    from app.models.user import User
+    from app.services.auth import hash_password
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from uuid import uuid4
+
+    email = f"test_{uuid4().hex[:8]}@example.com"
+    pw = "StrongPassW0rd#"
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with Session() as s:
+        s.add(User(
+            id=uuid4(),
+            email=email,
+            hashed_pw=hash_password(pw),
+            role="admin",
+        ))
+        await s.commit()
+
+    r = await client.post(
+        "/api/v1/auth/login", json={"email": email, "password": pw}
+    )
+    assert r.status_code == 200, f"auth_client login failed: {r.text}"
+    token = r.json()["access_token"]
+    client.headers["Authorization"] = f"Bearer {token}"
+    return client
