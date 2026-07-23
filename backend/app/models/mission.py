@@ -28,7 +28,7 @@ class Mission(Base):
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     template: Mapped[str | None] = mapped_column(String(40))
-    waypoints: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    waypoints: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'"))
     params: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, server_default=text("'{}'::jsonb")
     )

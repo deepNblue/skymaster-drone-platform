@@ -26,6 +26,9 @@ class MediaAsset(Base):
     drone_id: Mapped[UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("drones.id"), index=True
     )
+    org_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("organization.id"), index=True
+    )
     type: Mapped[str | None] = mapped_column(String(20))
     minio_key: Mapped[str] = mapped_column(Text, nullable=False)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger)

@@ -101,6 +101,10 @@ class ReportPostRequest(BaseModel):
     note: Optional[str] = None
 
 
+class ReportPostByPathRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=32)
+
+
 class ResolveReportRequest(BaseModel):
     action: str = Field(description="'resolve' or 'dismiss'")
     note: Optional[str] = None
@@ -526,6 +530,31 @@ async def submit_report(
         reporter_id=current_user.id,
         reason=req.reason,
         note=req.note,
+    )
+    db.add(report)
+    await db.commit()
+    await db.refresh(report)
+    return {"report_id": report.id}
+
+
+@router.post("/posts/{post_id}/report", status_code=201)
+async def report_post_by_path(
+    post_id: UUID,
+    req: ReportPostByPathRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, UUID]:
+    """Submit a user report against a post (path-parameter variant)."""
+    post = (
+        await db.execute(select(CommunityPost).where(CommunityPost.id == post_id))
+    ).scalar_one_or_none()
+    if post is None:
+        raise HTTPException(404, "post not found")
+
+    report = CommunityReport(
+        post_id=post_id,
+        reporter_id=current_user.id,
+        reason=req.reason,
     )
     db.add(report)
     await db.commit()
@@ -1152,6 +1181,7 @@ class ModerationStatsOut(BaseModel):
     auto_hide_threshold: int
     pending_posts: int
     auto_hidden_posts: int
+    top_reasons_7d: list[dict] = []
 
 
 @router.get("/moderation/stats", response_model=ModerationStatsOut)
@@ -1173,6 +1203,18 @@ async def get_moderation_stats(
         await db.execute(select(CommunityPost))
     ).scalars().all()
 
+    # Top report reasons in last 7 days
+    cutoff_7d = datetime.utcnow() - timedelta(days=7)
+    recent_reports = [r for r in reports if r.created_at and r.created_at >= cutoff_7d]
+    reason_counts: dict[str, int] = {}
+    for r in recent_reports:
+        reason_counts[r.reason] = reason_counts.get(r.reason, 0) + 1
+    top_reasons = sorted(
+        [{"reason": k, "count": v} for k, v in reason_counts.items()],
+        key=lambda x: x["count"],
+        reverse=True,
+    )
+
     return ModerationStatsOut(
         total_reports=len(reports),
         open_reports=sum(1 for r in reports if r.status == "open"),
@@ -1188,4 +1230,5 @@ async def get_moderation_stats(
         auto_hide_threshold=int(os.environ.get("COMMUNITY_AUTO_HIDE_THRESHOLD", "3")),
         pending_posts=sum(1 for p in posts if p.moderation_status == "pending"),
         auto_hidden_posts=sum(1 for p in posts if (p.moderation_reason or "").startswith("auto-hidden:")),
+        top_reasons_7d=top_reasons,
     )

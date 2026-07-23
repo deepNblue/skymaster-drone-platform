@@ -25,7 +25,7 @@ class User(Base):
         index=True,
     )
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    hashed_pw: Mapped[str] = mapped_column(String(255), nullable=False)
+    hashed_pw: Mapped[str] = mapped_column(String(255), nullable=False, server_default=text("'unset'"))
     role: Mapped[str] = mapped_column(
         String(30), nullable=False, server_default="operator"
     )

@@ -5,6 +5,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import String, text
+from sqlalchemy import String
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -23,6 +24,7 @@ class Organization(Base):
     tenant_type: Mapped[str] = mapped_column(
         String(30), nullable=False, server_default="standard"
     )
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), server_default=text("now()")
     )

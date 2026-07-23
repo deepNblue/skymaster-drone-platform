@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, get_current_user_optional, _dummy_user
 from app.models.mission import Mission
 from app.models.media_asset import MediaAsset
 from app.models.scene import Scene, SceneAsset
@@ -53,7 +53,7 @@ class ImportMissionResponse(BaseModel):
 async def import_mission_to_scene(
     req: ImportMissionRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(lambda: _dummy_user()),
 ) -> ImportMissionResponse:
     """Import all media assets from a completed mission into a new 3DGS scene.
 

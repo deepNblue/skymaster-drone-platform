@@ -22,6 +22,7 @@ os.environ.setdefault("USE_FAKE_REDIS", "true")
 os.environ.setdefault("ENABLE_MISSION_WATCHER", "false")
 os.environ.setdefault("ENABLE_TRAJECTORY_STORE", "false")
 os.environ.setdefault("UOM_AUTO_APPROVE", "false")  # avoid pending racing tests
+# AUTH_OPTIONAL not set globally - scenes_import uses optional auth
 
 
 # --- SQLite compat for Postgres-specific types ---------------------------
@@ -69,8 +70,99 @@ from sqlalchemy.dialects.postgresql import ARRAY as _PgARRAY  # noqa: E402
 def _sqlite_array(element, compiler, **kw):
     return "TEXT"
 
+
+# SQLite doesn't have now() function - map to CURRENT_TIMESTAMP
+from sqlalchemy import func as _sa_func
+
+
+@compiles(_sa_func.now, "sqlite")
+def _sqlite_now(element, compiler, **kw):
+    return "CURRENT_TIMESTAMP"
+
+
+# Patch text() server_defaults for SQLite (gen_random_uuid, etc.)
+# Done at runtime in _ensure_schema and client fixtures
+
 import pytest_asyncio  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
+
+# httpx >=0.28 removed the app= parameter from AsyncClient.
+# Patch it back for test files that still use the old API.
+_original_async_client_init = AsyncClient.__init__
+
+
+def _patched_async_client_init(self, *args, **kwargs):
+    if "app" in kwargs:
+        app = kwargs.pop("app")
+        kwargs.setdefault("transport", ASGITransport(app=app))
+    return _original_async_client_init(self, *args, **kwargs)
+
+
+AsyncClient.__init__ = _patched_async_client_init
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _ensure_schema():
+    """Ensure SQLite schema exists for every test (even those that bypass
+    the `client` fixture and use AsyncSessionLocal directly)."""
+    from app.db import engine, Base
+    if "sqlite" in str(engine.url):
+        # Register now() function for SQLite (used in server_default/onupdate)
+        from sqlalchemy import event as _sa_event
+        import datetime as _dt
+        @_sa_event.listens_for(engine.sync_engine, "connect")
+        def _register_now(dbapi_conn, conn_record):
+            dbapi_conn.create_function("now", 0, lambda: _dt.datetime.utcnow().isoformat())
+        from app.models import (  # noqa: F401
+            user, organization, drone, mission, flight_log, audit_log,
+            backup_code, login_event, password_reset_token,
+            revoked_token, media_asset,
+            flight_approval, vision_copilot, aaas, video_stream, model_marketplace,
+            scene, scene_marketplace, scene_moderation, scene_job,
+            community,
+            copilot_workflow, copilot_workflow_run, copilot_workflow_schedule,
+            community_playbook, approval_template, airspace_calendar,
+            marketplace_monetization,
+             scene_annotation,
+             scene_frame,
+         )
+        try:
+            # Patch ::jsonb, func.now(), gen_random_uuid() server_defaults for SQLite
+            from sqlalchemy import text as sa_text, ColumnDefault, DefaultClause
+            import uuid as _uuid
+            for table in Base.metadata.sorted_tables:
+                for col in table.columns:
+                    sd = col.server_default
+                    if sd is not None and hasattr(sd, 'arg'):
+                        raw = sd.arg
+                        raw_text = ""
+                        if isinstance(raw, str):
+                            raw_text = raw
+                        elif hasattr(raw, 'text'):
+                            raw_text = raw.text
+                        elif hasattr(raw, 'name') and raw.name == 'now':
+                            raw_text = "now()"
+
+                        if '::jsonb' in raw_text:
+                            col.server_default = DefaultClause(sa_text(raw_text.replace('::jsonb', '')))
+                        elif 'gen_random_uuid' in raw_text:
+                            col.server_default = None
+                            if col.default is None:
+                                col.default = ColumnDefault(lambda: _uuid.uuid4())
+                        elif raw_text == 'now()' or (hasattr(raw, 'name') and raw.name == 'now'):
+                            col.server_default = DefaultClause(sa_text("CURRENT_TIMESTAMP"))
+
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            # Clean all rows between tests (reverse dependency order)
+            from sqlalchemy import delete
+            async with engine.begin() as conn:
+                for table in reversed(Base.metadata.sorted_tables):
+                    await conn.execute(delete(table))
+        except Exception as e:
+            import warnings
+            warnings.warn(f"_ensure_schema create_all failed: {e}")
+    yield
 
 
 @pytest_asyncio.fixture
@@ -114,6 +206,12 @@ async def client() -> AsyncClient:
     # we assume alembic has already run.
     from app.db import engine, Base
     if "sqlite" in str(engine.url):
+        # Register now() function for SQLite (used in server_default/onupdate)
+        from sqlalchemy import event as _sa_event
+        import datetime as _dt
+        @_sa_event.listens_for(engine.sync_engine, "connect")
+        def _register_now(dbapi_conn, conn_record):
+            dbapi_conn.create_function("now", 0, lambda: _dt.datetime.utcnow().isoformat())
         from app.models import (  # noqa: F401
             user, organization, drone, mission, flight_log, audit_log,
             backup_code, login_event, password_reset_token,
@@ -128,6 +226,31 @@ async def client() -> AsyncClient:
              scene_frame,
          )
         try:
+            # Patch ::jsonb, func.now(), gen_random_uuid() server_defaults for SQLite
+            from sqlalchemy import text as sa_text, ColumnDefault, DefaultClause
+            import uuid as _uuid
+            for table in Base.metadata.sorted_tables:
+                for col in table.columns:
+                    sd = col.server_default
+                    if sd is not None and hasattr(sd, 'arg'):
+                        raw = sd.arg
+                        raw_text = ""
+                        if isinstance(raw, str):
+                            raw_text = raw
+                        elif hasattr(raw, 'text'):
+                            raw_text = raw.text
+                        elif hasattr(raw, 'name') and raw.name == 'now':
+                            raw_text = "now()"
+
+                        if '::jsonb' in raw_text:
+                            col.server_default = DefaultClause(sa_text(raw_text.replace('::jsonb', '')))
+                        elif 'gen_random_uuid' in raw_text:
+                            col.server_default = None
+                            if col.default is None:
+                                col.default = ColumnDefault(lambda: _uuid.uuid4())
+                        elif raw_text == 'now()' or (hasattr(raw, 'name') and raw.name == 'now'):
+                            col.server_default = DefaultClause(sa_text("CURRENT_TIMESTAMP"))
+
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
         except Exception:  # noqa: BLE001

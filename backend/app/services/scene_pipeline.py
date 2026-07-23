@@ -52,7 +52,7 @@ log = logging.getLogger(__name__)
 # Forward legal transitions. NB: this must remain a pure Python dict —
 # tests key off it directly.
 _LEGAL_TRANSITIONS: dict[str, set[str]] = {
-    "draft": {"ingesting", "archived", "failed"},
+    "draft": {"ingesting", "ingested", "archived", "failed"},
     "ingesting": {"ingested", "failed", "draft"},  # allow revert
     "ingested": {"colmap", "failed", "archived"},
     "colmap": {"colmap_done", "failed"},
