@@ -68,7 +68,7 @@ def _register_pg_funcs(dbapi_conn, conn_record):
         "gen_random_uuid", 0, lambda: str(uuid.uuid4()))
 
 
-_sa_event.listens_for(engine.sync_engine, "connect")(_register_pg_funcs)
+_sa_event.listens_for(engine.sync_engine, "connect")(_register_pg_funcs) if "sqlite" in str(engine.url) else None
 
 
 def _patch_server_defaults() -> None:
@@ -102,7 +102,17 @@ def _patch_server_defaults() -> None:
 
 
 async def main() -> None:
-    _patch_server_defaults()
+    if "sqlite" in str(engine.url):
+        _patch_server_defaults()
+    else:
+        # PG: ensure id columns without any default still get uuid
+        from sqlalchemy import text as sa_text, ColumnDefault, DefaultClause
+        import uuid as _uuid
+        for table in Base.metadata.sorted_tables:
+            for col in table.columns:
+                if col.name == "id" and col.server_default is None \
+                        and col.default is None:
+                    col.default = ColumnDefault(lambda: _uuid.uuid4())
     ok, fail = 0, []
     for name in Base.metadata.tables:
         try:
@@ -117,9 +127,15 @@ async def main() -> None:
         print(f"FAIL: {n} -> {e}")
     from sqlalchemy import text
     async with engine.connect() as conn:
-        n = len((await conn.execute(
-            text("SELECT name FROM sqlite_master WHERE type='table'")
-        )).fetchall())
+        if "sqlite" in str(engine.url):
+            rows = (await conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'")
+            )).fetchall()
+        else:
+            rows = (await conn.execute(
+                text("SELECT tablename FROM pg_tables WHERE schemaname='public'")
+            )).fetchall()
+        n = len(rows)
     print(f"dev DB ready: {ok}/{len(Base.metadata.tables)} created, "
           f"{n} tables present at {engine.url}")
 

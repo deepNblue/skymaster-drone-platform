@@ -99,6 +99,72 @@ async def drone_stats(
     }
 
 
+@router.get("/{drone_id}/track")
+async def drone_track(
+    drone_id: UUID,
+    seconds: int = Query(300, ge=60, le=86400),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Downsampled historical track for one drone from flight_logs.
+
+    Sampled at ~1 point per minute to keep payloads small (24h -> ~1440 pts).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.models.flight_log import FlightLog
+
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(seconds=seconds)
+
+    dialect_name = ""
+    if db.bind is not None:
+        dialect_name = str(getattr(db.bind.dialect, "name", ""))
+    if "sqlite" in dialect_name:
+        minute_expr = func.substr(cast(FlightLog.time, String), 1, 16)
+    else:
+        minute_expr = func.to_char(FlightLog.time, 'YYYY-MM-DD HH24:MI')
+
+    try:
+        rn = func.row_number().over(
+            partition_by=minute_expr, order_by=FlightLog.time.desc()
+        ).label("rn")
+        sub = (
+            select(FlightLog.time, FlightLog.lat, FlightLog.lng, FlightLog.alt, rn)
+            .where(
+                FlightLog.drone_id == drone_id,
+                FlightLog.time >= since,
+                FlightLog.lat.is_not(None),
+                FlightLog.lng.is_not(None),
+            )
+            .subquery()
+        )
+        rows = (await db.execute(
+            select(sub.c.time, sub.c.lat, sub.c.lng, sub.c.alt)
+            .where(sub.c.rn == 1)
+            .order_by(sub.c.time))).all()
+    except Exception:
+        # group_by on expression not supported by dialect -> raw cap
+        rows = (await db.execute(
+            select(FlightLog.time, FlightLog.lat, FlightLog.lng, FlightLog.alt)
+            .where(
+                FlightLog.drone_id == drone_id,
+                FlightLog.time >= since,
+                FlightLog.lat.is_not(None),
+            )
+            .order_by(FlightLog.time).limit(2000))).all()
+
+    trail = [
+        {
+            "lat": float(r[1]),
+            "lng": float(r[2]),
+            "alt": float(r[3]) if r[3] is not None else 100.0,
+        }
+        for r in rows
+    ]
+    return {"trail": trail, "points": len(trail), "seconds": seconds}
+
+
 @router.get("", response_model=dict)
 async def list_drones(
     status_filter: str | None = Query(default=None, alias="status"),

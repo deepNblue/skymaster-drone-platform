@@ -33,10 +33,9 @@ export default function TrajectoryPanel({ droneIds, apiBase, onTrailsUpdate }: P
       try {
         const results = await Promise.all(
           droneIds.map(async (id) => {
-            const r = await fetch(`${apiBase}/trajectory/${id}?seconds=${seconds}`);
-            if (!r.ok) return { id, trail: [] as any[] };
-            const j = await r.json();
-            return { id, trail: j.trail || [] };
+            const { api } = await import('@/lib/api');
+            const r = await api.get('/api/v1/drones/' + id + '/track?seconds=' + seconds);
+            return { id, trail: (r.data?.trail || []) as any[] };
           })
         );
 
@@ -110,9 +109,9 @@ export default function TrajectoryPanel({ droneIds, apiBase, onTrailsUpdate }: P
                 value={seconds}
                 onChange={(v) => setSeconds(v || 300)}
                 min={30}
-                max={3600}
+                max={86400}
                 step={30}
-                style={{ width: 80 }}
+                style={{ width: 90 }}
               />
               <span style={{ color: '#8b949e', fontSize: 12 }}>秒</span>
             </Space>
