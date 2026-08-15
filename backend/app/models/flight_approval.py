@@ -64,7 +64,7 @@ class FlightApproval(Base):
     start_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     end_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # draft | submitted | pending_second_approval | in_review | approved | rejected | flown | archived | cancelled
-    status: Mapped[str] = mapped_column(String(16), default="draft", nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(24), default="draft", nullable=False, index=True)
     reject_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # T7.0 second-approval trio ------------------------------------------
     requires_second_approval: Mapped[bool] = mapped_column(
@@ -112,7 +112,7 @@ class FlightApprovalAuthority(Base):
     # api | rpa | manual — how we submit
     channel: Mapped[str] = mapped_column(String(16), default="manual", nullable=False)
     # pending | submitted | accepted | approving | approved | rejected | skipped
-    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False, index=True)
     external_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
