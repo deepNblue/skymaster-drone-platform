@@ -107,7 +107,7 @@ export default function LoginPage() {
               >
                 <Input
                   prefix={<UserOutlined />}
-                  placeholder="admin@skymaster.local"
+                  placeholder="admin@skymaster.cn"
                 />
               </Form.Item>
               <Form.Item

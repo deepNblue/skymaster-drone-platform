@@ -18,7 +18,7 @@ async def test_create_public_post_approved(auth_client: AsyncClient) -> None:
             "tags": ["mapping", "beginner"],
         },
     )
-    assert response.status_code == 200
+    assert response.status_code == 201
     data = response.json()
     assert data["moderation_status"] == "approved"
     assert "id" in data
@@ -33,7 +33,7 @@ async def test_create_post_blocked_keyword(auth_client: AsyncClient) -> None:
             "body": "I have a crack for this tool, contact me...",
         },
     )
-    assert response.status_code == 200
+    assert response.status_code == 201
     data = response.json()
     assert data["moderation_status"] == "rejected"
     assert "crack" in data["moderation_reason"]
@@ -73,7 +73,7 @@ async def test_add_comment_to_approved_post(auth_client: AsyncClient) -> None:
         f"/api/v1/community/posts/{post_id}/comments",
         json={"body": "Great post, thanks for sharing!"},
     )
-    assert comment_resp.status_code == 200
+    assert comment_resp.status_code == 201
     comment_data = comment_resp.json()
     assert comment_data["post_id"] == post_id
     assert "id" in comment_data

@@ -61,6 +61,57 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.conn_manager = ConnectionManager()
 
     # DB init is done via alembic, no action at startup.
+    # SQLite dev mode: swap PG server_defaults for client-side defaults
+    from app.sqlite_compat import apply_sqlite_compat
+    apply_sqlite_compat()
+
+    # Dev/demo telemetry stack (MAVLink connectors + consumer), enabled with
+    # START_TELEMETRY_STACK=true. Drones declare their MAVLink sysid and UDP
+    # port in Drone.meta ({"sysid": 1, "udp_port": 14550}); telemetry streams
+    # are keyed by Drone UUID so the consumer persists flight_logs rows.
+    if os.getenv("START_TELEMETRY_STACK", "false").lower() in ("1", "true", "yes"):
+        import asyncio as _aio
+        from sqlalchemy import select as _select
+
+        from app.db import AsyncSessionLocal
+        from app.models.drone import Drone
+        from app.services.mavlink_connector import MavlinkConnector
+        from app.services.telemetry_consumer import (
+            TelemetryConsumer,
+            _build_redis_client,
+        )
+
+        _rc = _build_redis_client()
+        # WS endpoints (websocket.py) fan out pub/sub via app.state.redis;
+        # expose the same client (fake or real) to the app state.
+        app.state.redis = _rc
+        _consumer = TelemetryConsumer(_rc, session_factory=AsyncSessionLocal)
+        _connectors = []
+        async with AsyncSessionLocal() as _s:
+            _rows = (await _s.execute(_select(Drone))).scalars().all()
+            for _d in _rows:
+                _meta = getattr(_d, "meta", None) or {}
+                _sysid = _meta.get("sysid")
+                _port = _meta.get("udp_port")
+                if not (_sysid and _port):
+                    continue
+                _ep = "udpin:0.0.0.0:" + str(_port)
+                _conn = MavlinkConnector(
+                    _ep, _rc, sysid_map={_sysid: str(_d.id)})
+                try:
+                    _conn.connect()
+                except Exception:  # noqa: BLE001
+                    logger.exception("MAVLink connector %s failed", _ep)
+                    continue
+                _connectors.append(_conn)
+        if _connectors:
+            _tasks = [_aio.create_task(_c.run()) for _c in _connectors]
+            _tasks.append(_aio.create_task(_consumer.run()))
+            app.state.telemetry_stack_tasks = _tasks
+            app.state.telemetry_stack = (_connectors, _consumer)
+            logger.info(
+                "Telemetry stack started: %d connector(s) + consumer",
+                len(_connectors))
 
     # Start periodic revoked JWT cleanup task if enabled
     revoke_cleanup_task: asyncio.Task | None = None
@@ -120,6 +171,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Finished startup
     logger.info("SkyMaster backend starting up — version v2.1-dev")
     yield
+
+    # Telemetry stack teardown (started above when
+    # START_TELEMETRY_STACK=true)
+    _stack = getattr(app.state, "telemetry_stack", None)
+    if _stack:
+        _conns, _cons = _stack
+        for _c in _conns:
+            _c.stop()
+        _cons.stop()
+        for _t in getattr(app.state, "telemetry_stack_tasks", []):
+            _t.cancel()
+        logger.info("Telemetry stack stopped")
 
     # Shutdown: cancel background tasks
     if revoke_cleanup_task is not None:

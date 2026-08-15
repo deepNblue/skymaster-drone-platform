@@ -28,7 +28,11 @@ class DroneOut(BaseModel):
     model: str | None = None
     protocol: str
     status: str | None = None
-    meta: dict[str, Any] | None = Field(default=None, alias="metadata")
+    # NOTE: validation must read the ORM attribute `meta` (plain alias
+    # "metadata" would grab SQLAlchemy's class-level MetaData object via
+    # from_attributes); JSON key stays "metadata" for API compat.
+    meta: dict[str, Any] | None = Field(
+        default=None, serialization_alias="metadata")
     created_at: datetime | None = None
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
@@ -14,6 +14,89 @@ from app.models.user import User
 from app.schemas.drone import DroneCreate, DroneOut
 
 router = APIRouter(prefix="/drones", tags=["drones"])
+
+
+@router.get("/stats", response_model=dict)
+async def drone_stats(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Aggregated dashboard stats (online drones, missions today, pending
+    approvals, flight log counts) for the landing dashboard cards."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.models.flight_approval import FlightApproval
+    from app.models.flight_log import FlightLog
+    from app.models.mission import Mission
+
+    now = datetime.now(timezone.utc)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    active_since = now - timedelta(minutes=5)
+
+    drones = (await db.execute(select(Drone))).scalars().all()
+    total = len(drones)
+
+    # flight log aggregates
+    logs_24h = (await db.execute(
+        select(func.count()).select_from(FlightLog).where(
+            FlightLog.time >= now - timedelta(hours=24)))).scalar() or 0
+    per_drone_rows = (await db.execute(
+        select(FlightLog.drone_id, func.count().label("c"))
+        .where(FlightLog.time >= active_since)
+        .group_by(FlightLog.drone_id))).all()
+    active_ids = {str(r[0]) for r in per_drone_rows}
+
+    # hourly telemetry volume for the last 24h (cross-dialect: SQLite
+    # substr on ISO text works; PG uses to_char)
+    dialect_name = ""
+    if db.bind is not None:
+        dialect_name = str(getattr(db.bind.dialect, "name", ""))
+    try:
+        if "sqlite" in dialect_name:
+            hour_expr = func.substr(cast(FlightLog.time, String), 1, 13)
+        else:
+            hour_expr = func.to_char(FlightLog.time, 'YYYY-MM-DD HH24')
+        hour_rows = (await db.execute(
+            select(hour_expr.label("h"), func.count().label("c"))
+            .where(FlightLog.time >= now - timedelta(hours=24))
+            .group_by(hour_expr).order_by(hour_expr))).all()
+    except Exception:
+        hour_rows = []
+    hourly = [{"hour": str(r[0]), "count": int(r[1])} for r in hour_rows]
+
+    missions_today = (await db.execute(
+        select(func.count()).select_from(Mission).where(
+            Mission.org_id == user.org_id,
+            Mission.created_at >= day_start))).scalar() or 0
+
+    pending_approvals = (await db.execute(
+        select(func.count()).select_from(FlightApproval).where(
+            FlightApproval.tenant_id == user.org_id,
+            FlightApproval.status == "pending"))).scalar() or 0
+
+    status_dist: dict[str, int] = {}
+    for d in drones:
+        s = d.status or "unknown"
+        status_dist[s] = status_dist.get(s, 0) + 1
+
+    per_drone = [
+        {
+            "drone_id": str(d.id),
+            "sn": d.sn,
+            "online": str(d.id) in active_ids,
+        }
+        for d in drones
+    ]
+    return {
+        "total_drones": total,
+        "online_drones": len(active_ids),
+        "flight_logs_24h": logs_24h,
+        "hourly": hourly,
+        "missions_today": missions_today,
+        "pending_approvals": pending_approvals,
+        "status_dist": status_dist,
+        "per_drone": per_drone,
+    }
 
 
 @router.get("", response_model=dict)

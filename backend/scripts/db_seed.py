@@ -2,7 +2,7 @@
 
 Creates:
   * 1 Organization named "TestOrg"
-  * 1 admin User (email=admin@test.local, password=admin123, role=admin)
+  * 1 admin User (email=admin@skymaster.cn, password=admin123, role=admin)
 
 Both are upserted — running the script twice is safe.
 
@@ -27,9 +27,13 @@ from app.models.organization import Organization  # noqa: E402
 from app.models.user import User  # noqa: E402
 from app.services.auth import hash_password  # noqa: E402
 
+# After all models registered on Base.metadata:
+from app.sqlite_compat import apply_sqlite_compat  # noqa: E402
+apply_sqlite_compat()
+
 
 SEED_ORG_NAME = "TestOrg"
-SEED_USER_EMAIL = "admin@test.local"
+SEED_USER_EMAIL = "admin@skymaster.cn"
 SEED_USER_PASSWORD = "admin123"
 SEED_USER_ROLE = "admin"
 

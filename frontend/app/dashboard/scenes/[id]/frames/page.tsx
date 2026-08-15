@@ -1,7 +1,7 @@
 /**
  * D3.2 · SceneFramesPage — 4DGS timeline slider + frame editor.
  *
- * URL: /dashboard/scenes/[sid]/frames
+ * URL: /dashboard/scenes/[id]/frames
  *
  * Layout:
  *   Header row: 场景 ID / 总帧数 / 关键帧数 / 平均 PSNR
@@ -32,8 +32,8 @@ const { Text } = Typography;
 
 
 export default function SceneFramesPage() {
-  const params = useParams<{ sid: string }>();
-  const sid = params?.sid ?? '';
+  const params = useParams<{ id: string }>();
+  const sid = params?.id ?? '';
 
   const [frames, setFrames] = useState<SceneFrame[]>([]);
   const [summary, setSummary] = useState<TimelineSummary | null>(null);

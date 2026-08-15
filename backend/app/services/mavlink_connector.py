@@ -57,10 +57,14 @@ class MavlinkConnector:
         endpoint: str = "udpin:0.0.0.0:14550",
         redis_client: Any = None,
         publish_interval_ms: int = 500,
+        sysid_map: Optional[Dict[int, str]] = None,
     ) -> None:
         self.endpoint = endpoint
         self.redis = redis_client
         self.publish_interval = publish_interval_ms / 1000.0
+        # Optional MAVLink system_id -> Drone UUID mapping (dev/demo stack:
+        # lets telemetry streams/DB rows key on real Drone primary keys).
+        self.sysid_map: Dict[int, str] = dict(sysid_map or {})
         # drone_id (system_id) -> rolling telemetry dict
         self.telemetry: Dict[int, Dict[str, Any]] = {}
         self._conn: Any = None
@@ -159,7 +163,7 @@ class MavlinkConnector:
         return self.telemetry.setdefault(
             sysid,
             {
-                "drone_id": sysid,
+                "drone_id": self.sysid_map.get(sysid, sysid),
                 "lat": None,
                 "lng": None,
                 "alt": None,
@@ -253,7 +257,9 @@ class MavlinkConnector:
         if self.redis is None:
             return
         import json as _json
-        for drone_id, slot in list(self.telemetry.items()):
+        for _sysid, slot in list(self.telemetry.items()):
+            # Prefer the mapped Drone UUID (sysid_map) over the raw sysid.
+            drone_id = slot.get("drone_id", _sysid)
             stream = f"telemetry:{drone_id}"
             channel = f"telemetry.broadcast.{drone_id}"
             payload = self._stream_payload(slot)

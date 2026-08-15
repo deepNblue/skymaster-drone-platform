@@ -344,7 +344,7 @@ async def complete_upload(
     )
 
 
-@router.delete("/{upload_id}", status_code=204)
+@router.delete("/{upload_id}", status_code=204, response_model=None)
 async def abort_upload(
     scene_id: UUID,
     upload_id: str,

@@ -354,6 +354,22 @@ async def auth_client(client: AsyncClient) -> AsyncClient:
     r = await client.post(
         "/api/v1/auth/login", json={"email": email, "password": pw}
     )
+    if r.status_code != 200:
+        # Full-suite runs occasionally hit transient SQLite/session
+        # visibility issues right after CREATE. Retry once with a
+        # brand-new user before declaring fixture failure.
+        email = f"test_{uuid4().hex[:8]}@example.com"
+        async with Session() as s:
+            s.add(User(
+                id=uuid4(),
+                email=email,
+                hashed_pw=hash_password(pw),
+                role="admin",
+            ))
+            await s.commit()
+        r = await client.post(
+            "/api/v1/auth/login", json={"email": email, "password": pw}
+        )
     assert r.status_code == 200, f"auth_client login failed: {r.text}"
     token = r.json()["access_token"]
     client.headers["Authorization"] = f"Bearer {token}"

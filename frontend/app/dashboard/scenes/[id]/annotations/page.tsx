@@ -7,7 +7,7 @@
  * The actual 3D pick + draw interactions live in Reality Studio viewer;
  * this panel exposes CRUD + filtering + status tracking.
  *
- * Route: /dashboard/scenes/[sid]/annotations
+ * Route: /dashboard/scenes/[id]/annotations
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
@@ -38,9 +38,9 @@ const SEVERITIES: Severity[] = [
 const GEOM_KINDS: GeomKind[] = ['point', 'line', 'polygon', 'volume'];
 
 export default function SceneAnnotationsPage() {
-  const params = useParams<{ sid: string }>();
+  const params = useParams<{ id: string }>();
   const router = useRouter();
-  const sid = params.sid;
+  const sid = params.id;
 
   const [rows, setRows] = useState<Annotation[]>([]);
   const [stats, setStats] = useState<AnnotationStats | null>(null);

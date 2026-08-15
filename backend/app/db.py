@@ -27,6 +27,21 @@ if "sqlite" in DATABASE_URL and ":memory:" in DATABASE_URL:
 
 engine = create_async_engine(DATABASE_URL, **_engine_kwargs)
 
+# SQLite dev mode: register stand-ins for PG server_default functions
+# (now(), gen_random_uuid()) so INSERTs against a SQLite dev DB work
+# without Postgres. Mirrors tests/conftest.py.
+if "sqlite" in DATABASE_URL:
+    import datetime as _dt
+    import uuid as _uuid
+    from sqlalchemy import event as _sa_event
+
+    @_sa_event.listens_for(engine.sync_engine, "connect")
+    def _register_pg_funcs(dbapi_conn, conn_record):  # noqa: ANN001
+        dbapi_conn.create_function(
+            "now", 0, lambda: _dt.datetime.utcnow().isoformat())
+        dbapi_conn.create_function(
+            "gen_random_uuid", 0, lambda: str(_uuid.uuid4()))
+
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,

@@ -193,7 +193,7 @@ async def get_dataset(
     return TrainingDatasetOut.model_validate(ds)
 
 
-@router.delete("/datasets/{dataset_id}", status_code=204)
+@router.delete("/datasets/{dataset_id}", status_code=204, response_model=None)
 async def delete_dataset(
     dataset_id: UUID,
     current_user: User = Depends(get_current_user),

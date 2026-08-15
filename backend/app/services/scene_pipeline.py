@@ -87,6 +87,45 @@ async def transition(
     else:
         # Clear stale error when moving off of failed.
         scene.error_msg = None
+
+    # Snapshot payload fields BEFORE flush(): flush expires server-side
+    # default/onupdate attributes (e.g. updated_at), and an async session
+    # cannot lazy-reload them (MissingGreenlet) - which would make the
+    # SSE publish below silently fail.
+    # Which attributes are NOT loaded on this instance? Reading an
+    # unloaded/expired instrumented attribute triggers synchronous IO,
+    # which in an async session raises MissingGreenlet AND poisons the
+    # session (PendingRollbackError on the next flush). We therefore
+    # skip those attributes entirely instead of catching the error.
+    try:
+        from sqlalchemy import inspect as sa_inspect
+        _unloaded = set(sa_inspect(scene).unloaded)
+    except Exception:  # noqa: BLE001 - plain objects (tests/mocks)
+        _unloaded = set()
+
+    def _snap(attr, default=None):
+        if attr in _unloaded:
+            return default
+        try:
+            v = getattr(scene, attr, default)
+            return default if v is None else v
+        except Exception:  # noqa: BLE001 - snapshot must never break tx
+            return default
+
+    ua = _snap("updated_at")
+    sse_payload = {
+        "scene_id": str(_snap("id", "")),
+        "status": scene.status,
+        "n_source_images": _snap("n_source_images", 0) or 0,
+        "n_points": _snap("n_points"),
+        "n_gaussians": _snap("n_gaussians"),
+        "psnr_train": _snap("psnr_train"),
+        "scene_kind": _snap("scene_kind", "3dgs"),
+        "n_frames": _snap("n_frames"),
+        "psnr_temporal": _snap("psnr_temporal"),
+        "error_msg": scene.error_msg,
+        "updated_at": ua.isoformat() if ua else None,
+    }
     await db.flush()
 
     # v2.1: publish state transition to SSE broadcaster so subscribers
@@ -98,28 +137,8 @@ async def transition(
 
         get_broadcaster()  # ensure singleton
         broadcaster = get_broadcaster()
-        await broadcaster.publish(
-            f"scene:{scene.id}",
-            {
-                "scene_id": str(scene.id),
-                "status": scene.status,
-                "n_source_images": scene.n_source_images or 0,
-                "n_points": scene.n_points,
-                "n_gaussians": scene.n_gaussians,
-                "psnr_train": scene.psnr_train,
-                # v2.1 D2.1 · 4DGS-aware SSE payload. Falls back to None
-                # for legacy scenes without these columns.
-                "scene_kind": getattr(scene, "scene_kind", "3dgs"),
-                "n_frames": getattr(scene, "n_frames", None),
-                "psnr_temporal": getattr(scene, "psnr_temporal", None),
-                "error_msg": scene.error_msg,
-                "updated_at": (
-                    scene.updated_at.isoformat()
-                    if scene.updated_at else None
-                ),
-                "ts": datetime.now(timezone.utc).isoformat(),
-            },
-        )
+        sse_payload["ts"] = datetime.now(timezone.utc).isoformat()
+        await broadcaster.publish(f"scene:{scene.id}", sse_payload)
     except Exception:  # pragma: no cover — publish must not break DB tx
         import logging
         logging.getLogger(__name__).warning(

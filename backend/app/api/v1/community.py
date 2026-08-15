@@ -101,10 +101,6 @@ class ReportPostRequest(BaseModel):
     note: Optional[str] = None
 
 
-class ReportPostByPathRequest(BaseModel):
-    reason: str = Field(min_length=1, max_length=32)
-
-
 class ResolveReportRequest(BaseModel):
     action: str = Field(description="'resolve' or 'dismiss'")
     note: Optional[str] = None
@@ -349,12 +345,12 @@ async def update_post(
     return CommunityPostOut.model_validate(post)
 
 
-@router.delete("/posts/{post_id}", status_code=204)
+@router.delete("/posts/{post_id}")
 async def delete_post(
     post_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> None:
+) -> dict:
     """Delete a post (author or mod). Cascades to comments/likes/reports."""
     post = (
         await db.execute(select(CommunityPost).where(CommunityPost.id == post_id))
@@ -368,13 +364,15 @@ async def delete_post(
     await db.delete(post)
     await db.commit()
 
+    return {"detail": "deleted"}
+
 
 @router.post("/posts/{post_id}/like", status_code=200)
 async def like_post(
     post_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> dict[str, int]:
+) -> dict:
     """Like a post. Idempotent: inserting duplicate does nothing (unique constraint)."""
     post = (
         await db.execute(select(CommunityPost).where(CommunityPost.id == post_id))
@@ -393,13 +391,13 @@ async def like_post(
     ).scalar_one_or_none()
     if existing is not None:
         # Already liked — just return current count
-        return {"like_count": post.like_count}
+        return {"like_count": post.like_count, "liked_by_me": True}
 
     like = CommunityLike(post_id=post_id, user_id=current_user.id)
     db.add(like)
     post.like_count += 1
     await db.commit()
-    return {"like_count": post.like_count}
+    return {"like_count": post.like_count, "liked_by_me": True}
 
 
 @router.delete("/posts/{post_id}/like", status_code=200)
@@ -407,7 +405,7 @@ async def unlike_post(
     post_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> dict[str, int]:
+) -> dict:
     """Unlike a previously liked post."""
     post = (
         await db.execute(select(CommunityPost).where(CommunityPost.id == post_id))
@@ -424,16 +422,16 @@ async def unlike_post(
         )
     ).scalar_one_or_none()
     if existing is None:
-        return {"like_count": post.like_count}
+        return {"like_count": post.like_count, "liked_by_me": False}
 
     await db.delete(existing)
     if post.like_count > 0:
         post.like_count -= 1
     await db.commit()
-    return {"like_count": post.like_count}
+    return {"like_count": post.like_count, "liked_by_me": False}
 
 
-@router.post("/posts/{post_id}/comments", response_model=CommunityCommentOut)
+@router.post("/posts/{post_id}/comments", response_model=CommunityCommentOut, status_code=201)
 async def add_comment(
     post_id: UUID,
     req: CreateCommentRequest,
@@ -530,31 +528,6 @@ async def submit_report(
         reporter_id=current_user.id,
         reason=req.reason,
         note=req.note,
-    )
-    db.add(report)
-    await db.commit()
-    await db.refresh(report)
-    return {"report_id": report.id}
-
-
-@router.post("/posts/{post_id}/report", status_code=201)
-async def report_post_by_path(
-    post_id: UUID,
-    req: ReportPostByPathRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, UUID]:
-    """Submit a user report against a post (path-parameter variant)."""
-    post = (
-        await db.execute(select(CommunityPost).where(CommunityPost.id == post_id))
-    ).scalar_one_or_none()
-    if post is None:
-        raise HTTPException(404, "post not found")
-
-    report = CommunityReport(
-        post_id=post_id,
-        reporter_id=current_user.id,
-        reason=req.reason,
     )
     db.add(report)
     await db.commit()
