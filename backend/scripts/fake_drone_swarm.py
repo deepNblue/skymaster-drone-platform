@@ -29,7 +29,9 @@ class _Region:
 
 
 # Distinct start coords so operators can eyeball on a map without overlap.
+# Nanning first => default simulated region (count=3 spawns Nanning drones).
 _REGIONS: List[_Region] = [
+    _Region("Nanning", 22.8167, 108.3167),
     _Region("Beijing",  39.9042, 116.4074),
     _Region("Chengdu",  30.5728, 104.0668),
     _Region("Shenzhen", 22.5431, 114.0579),
@@ -44,6 +46,15 @@ def _drone_script_path() -> str:
 
 def _spawn_one(i: int, base_port: int, args: argparse.Namespace) -> subprocess.Popen:
     region = _REGIONS[i % len(_REGIONS)]
+    if getattr(args, "region", None):
+        # Pin all drones to one region: fan out with ~200m offsets.
+        want = next((r for r in _REGIONS if r.name.lower() == args.region.lower()),
+                    _REGIONS[0])
+        region = _Region(
+            want.name,
+            round(want.lat + 0.0018 * i, 6),
+            round(want.lng + 0.0022 * i, 6),
+        )
     port = base_port + i
     sysid = i + 1
     cmd = [
@@ -83,6 +94,9 @@ def _terminate(procs: List[subprocess.Popen], sig: int = signal.SIGTERM) -> None
 def main() -> int:
     parser = argparse.ArgumentParser(description="Spawn a fleet of FakeDrones")
     parser.add_argument("--count", type=int, default=3)
+    parser.add_argument("--region", default="",
+                        help="Pin ALL drones to one region (Nanning/Beijing/...); "
+                             "default: spread across regions")
     parser.add_argument("--base-port", type=int, default=14550)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--pattern", default="circle")

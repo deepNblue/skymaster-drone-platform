@@ -27,9 +27,9 @@ export default function SimControlPanel({ selectedDroneId }: { selectedDroneId?:
   const [sysid, setSysid] = useState<number>(1);
   const [state, setState] = useState<SimState | null>(null);
   const [busy, setBusy] = useState(false);
-  const [gotoLat, setGotoLat] = useState<number>(39.910);
-  const [gotoLng, setGotoLng] = useState<number>(116.420);
-  const [gotoAlt, setGotoAlt] = useState<number>(120);
+  const [gotoLat, setGotoLat] = useState<number>(22.821);
+  const [gotoLng, setGotoLng] = useState<number>(108.330);
+  const [gotoAlt, setGotoAlt] = useState<number>(110);
 
   useEffect(() => {
     api<{ drones: SimDrone[] }>('GET', '/sim/drones')
@@ -91,15 +91,15 @@ export default function SimControlPanel({ selectedDroneId }: { selectedDroneId?:
   const dispatchMission = () => {
     Modal.confirm({
       title: '派发演示任务',
-      content: `将向 sysid=${sysid} 上传 3 个航点（北京奥体附近）并进入 mission 模式`,
+      content: `将向 sysid=${sysid} 上传 3 个航点（南宁南湖公园附近）并进入 mission 模式`,
       okText: '派发',
       cancelText: '取消',
       onOk: async () => {
         await run('MISSION', () => api('POST', `/sim/drones/${sysid}/mission`, {
           waypoints: [
-            { lat: 39.905, lng: 116.405, alt: 80 },
-            { lat: 39.908, lng: 116.412, alt: 110 },
-            { lat: 39.914, lng: 116.418, alt: 140 },
+            { lat: 22.816, lng: 108.321, alt: 80 },   // 南湖公园西
+            { lat: 22.821, lng: 108.328, alt: 110 },   // 南湖东岸
+            { lat: 22.826, lng: 108.334, alt: 140 },   // 金湖广场方向
           ],
         }));
       },

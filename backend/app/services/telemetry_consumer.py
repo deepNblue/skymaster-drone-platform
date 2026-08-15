@@ -278,6 +278,22 @@ class TelemetryConsumer:
                 dropped_non_uuid,
             )
 
+        # Dedupe within batch on the composite PK (time, drone_id): duplicate
+        # entries can appear when a drone restarts or a slot is re-published,
+        # and a single dup would abort the whole batch on PG.
+        seen: set = set()
+        uniq_rows: List[Dict[str, Any]] = []
+        for r in rows:
+            key = (r["time"], r["drone_id"])
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq_rows.append(r)
+        if len(uniq_rows) < count:
+            logger.info("Deduped %d in-batch flight_logs rows", count - len(uniq_rows))
+        rows = uniq_rows
+        count = len(rows)
+
         if count == 0:
             self._buffer.clear()
             self._last_flush_at = time.monotonic()
@@ -285,14 +301,24 @@ class TelemetryConsumer:
 
         try:
             async with self._session_factory() as session:
-                await session.execute(insert(FlightLog), rows)
+                if session.bind is not None and session.bind.dialect.name == "postgresql":
+                    from sqlalchemy.dialects.postgresql import insert as pg_insert
+                    stmt = pg_insert(FlightLog).on_conflict_do_nothing(
+                        index_elements=["time", "drone_id"]
+                    )
+                else:  # sqlite: INSERT OR IGNORE
+                    stmt = insert(FlightLog).prefix_with("OR IGNORE")
+                await session.execute(stmt, rows)
                 await session.commit()
         except SQLAlchemyError:
             logger.exception(
-                "flight_logs batch insert failed (buffered=%d) — will retry",
+                "flight_logs batch insert failed (buffered=%d) - dropping batch",
                 count,
             )
-            # Preserve buffer for retry; caller applies backoff.
+            # Drop the poisoned batch: replaying it forever would deadlock
+            # ingestion (e.g. rows that already exist from an earlier run).
+            self._buffer.clear()
+            self._last_flush_at = time.monotonic()
             raise
 
         logger.info("Flushed %d telemetry rows to flight_logs", count)

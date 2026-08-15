@@ -48,12 +48,12 @@ async def main() -> None:
                 id=uuid4(),
                 org_id=org.id,
                 drone_id=drones[0].id,
-                name="天府大道巡检 Demo",
+                name="民族大道巡检 Demo",
                 template="waypoint",
                 waypoints=[
-                    {"lat": 30.5720, "lng": 104.0660, "alt": 100},
-                    {"lat": 30.5760, "lng": 104.0700, "alt": 100},
-                    {"lat": 30.5800, "lng": 104.0740, "alt": 120},
+                    {"lat": 22.8170, "lng": 108.3210, "alt": 100},   # 民族大道东段
+                    {"lat": 22.8200, "lng": 108.3270, "alt": 100},   # 金湖广场
+                    {"lat": 22.8240, "lng": 108.3330, "alt": 120},   # 会展中心方向
                 ],
                 params={"speed": 8, "rtl_on_finish": True},
                 status="completed",
@@ -65,11 +65,11 @@ async def main() -> None:
                 id=uuid4(),
                 org_id=org.id,
                 drone_id=drones[1].id,
-                name="锦城湖航拍 Demo",
+                name="南湖公园航拍 Demo",
                 template="waypoint",
                 waypoints=[
-                    {"lat": 30.5740, "lng": 104.0600, "alt": 80},
-                    {"lat": 30.5790, "lng": 104.0650, "alt": 80},
+                    {"lat": 22.8150, "lng": 108.3200, "alt": 80},   # 南湖西岸
+                    {"lat": 22.8190, "lng": 108.3240, "alt": 80},   # 南湖东岸
                 ],
                 params={"speed": 6},
                 status="in_progress",
@@ -80,11 +80,11 @@ async def main() -> None:
                 id=uuid4(),
                 org_id=org.id,
                 drone_id=drones[2].id,
-                name="龙泉山测绘规划 Demo",
+                name="青秀山测绘规划 Demo",
                 template="survey",
                 waypoints=[
-                    {"lat": 30.5600, "lng": 104.1000, "alt": 150},
-                    {"lat": 30.5650, "lng": 104.1100, "alt": 150},
+                    {"lat": 22.7860, "lng": 108.3250, "alt": 150},   # 青秀山北麓
+                    {"lat": 22.7900, "lng": 108.3350, "alt": 150},   # 青秀山东侧
                 ],
                 params={"grid_spacing": 30},
                 status="draft",
@@ -98,7 +98,7 @@ async def main() -> None:
             FlightApproval(
                 id=uuid4(),
                 tenant_id=org.id,
-                title="城南物流航线日常飞行申请",
+                title="五象新区物流航线日常飞行申请",
                 category="routine",
                 purpose="物流配送航线测试",
                 pilot_name="王飞",
@@ -107,10 +107,10 @@ async def main() -> None:
                 aircraft_model="FAKE-VTOL-300",
                 insurance_no="INS-2026-77201",
                 area_polygon=[
-                    {"lat": 30.55, "lng": 104.05},
-                    {"lat": 30.59, "lng": 104.05},
-                    {"lat": 30.59, "lng": 104.09},
-                    {"lat": 30.55, "lng": 104.09},
+                    {"lat": 22.75, "lng": 108.32},
+                    {"lat": 22.79, "lng": 108.32},
+                    {"lat": 22.79, "lng": 108.36},
+                    {"lat": 22.75, "lng": 108.36},
                 ],
                 max_alt_m=120.0,
                 min_alt_m=30.0,
@@ -121,7 +121,7 @@ async def main() -> None:
             FlightApproval(
                 id=uuid4(),
                 tenant_id=org.id,
-                title="青龙湖公园航拍活动申请",
+                title="南湖公园航拍活动申请",
                 category="routine",
                 purpose="文旅宣传航拍",
                 pilot_name="李云",
@@ -130,9 +130,9 @@ async def main() -> None:
                 aircraft_model="FAKE-QUAD-150",
                 insurance_no="INS-2026-77312",
                 area_polygon=[
-                    {"lat": 30.65, "lng": 104.15},
-                    {"lat": 30.68, "lng": 104.15},
-                    {"lat": 30.68, "lng": 104.19},
+                    {"lat": 22.810, "lng": 108.318},
+                    {"lat": 22.825, "lng": 108.318},
+                    {"lat": 22.825, "lng": 108.328},
                     {"lat": 30.65, "lng": 104.19},
                 ],
                 max_alt_m=90.0,
@@ -144,7 +144,7 @@ async def main() -> None:
             FlightApproval(
                 id=uuid4(),
                 tenant_id=org.id,
-                title="环城生态带夜间巡检申请",
+                title="邕江沿岸夜间巡检申请",
                 category="special",
                 purpose="生态带火情夜间巡查",
                 pilot_name="张夜",
@@ -153,10 +153,10 @@ async def main() -> None:
                 aircraft_model="FAKE-VTOL-300",
                 insurance_no="INS-2026-76550",
                 area_polygon=[
-                    {"lat": 30.60, "lng": 104.00},
-                    {"lat": 30.63, "lng": 104.00},
-                    {"lat": 30.63, "lng": 104.04},
-                    {"lat": 30.60, "lng": 104.04},
+                    {"lat": 22.80, "lng": 108.28},
+                    {"lat": 22.83, "lng": 108.28},
+                    {"lat": 22.83, "lng": 108.34},
+                    {"lat": 22.80, "lng": 108.34},
                 ],
                 max_alt_m=150.0,
                 min_alt_m=50.0,
