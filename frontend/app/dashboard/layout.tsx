@@ -36,35 +36,104 @@ import CopilotDrawer from '@/components/CopilotDrawer';
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
 
+// 分组导航（对标司空2：一级 <=9，管理类下沉二级）
 const menuItems = [
   { key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
-  { key: '/dashboard/drones', icon: <RocketOutlined />, label: '设备' },
-  { key: '/dashboard/missions', icon: <AimOutlined />, label: '任务' },
-  { key: '/dashboard/streams', icon: <VideoCameraOutlined />, label: '视频' },
-  { key: '/dashboard/live', icon: <GlobalOutlined />, label: '实时地图' },
-  { key: '/dashboard/approvals', icon: <AuditOutlined />, label: '审批' },
-  { key: '/dashboard/copilot', icon: <RobotOutlined />, label: 'Copilot' },
-  { key: '/dashboard/copilot-v2', icon: <ExperimentOutlined />, label: 'Copilot v2' },
-  { key: '/dashboard/copilot-workflows', icon: <CodeOutlined />, label: 'Workflow 编辑器' },
-  { key: '/dashboard/copilot-task-chain', icon: <ThunderboltOutlined />, label: 'Task Chain' },
-  { key: '/dashboard/copilot-approvals', icon: <SafetyOutlined />, label: '审批中心' },
-  { key: '/dashboard/copilot-history', icon: <HistoryOutlined />, label: 'Workflow 历史' },
-  { key: '/dashboard/copilot-traces', icon: <HistoryOutlined />, label: 'Copilot 追踪' },
-  { key: '/dashboard/copilot-tool-policy', icon: <SafetyCertificateOutlined />, label: 'Copilot 工具治理' },
-  { key: '/dashboard/copilot-memory', icon: <DatabaseOutlined />, label: 'Copilot 长期记忆' },
-  { key: '/dashboard/copilot-approval-policy', icon: <SafetyCertificateOutlined />, label: 'Copilot 审批策略' },
-  { key: '/dashboard/copilot-marketplace', icon: <AppstoreOutlined />, label: 'Copilot 市场' },
-  { key: '/dashboard/crypto-sm2', icon: <SafetyCertificateOutlined />, label: 'SM2 签名' },
-  { key: '/dashboard/audit-export', icon: <FileTextOutlined />, label: '审计导出' },
-  { key: '/dashboard/ciio', icon: <SafetyOutlined />, label: 'CIIO 自评' },
-  { key: '/dashboard/scenes', icon: <ThunderboltOutlined />, label: '3DGS 场景' },
-  { key: '/dashboard/marketplace', icon: <ShopOutlined />, label: '场景商店' },
-  { key: '/dashboard/model-marketplace', icon: <AppstoreOutlined />, label: '模型商店' },
-  { key: '/dashboard/community', icon: <FireOutlined />, label: '社区' },
-  { key: '/dashboard/moderation', icon: <SafetyCertificateOutlined />, label: '内容审核' },
-  { key: '/admin', icon: <SettingOutlined />, label: '管理后台' },
-  { key: '/dashboard/settings', icon: <SettingOutlined />, label: '设置' },
+  { key: '/dashboard/cockpit', icon: <ThunderboltOutlined />, label: '监控大屏' },
+  { key: '/dashboard/live', icon: <GlobalOutlined />, label: '态势' },
+  {
+    key: 'grp-flight',
+    icon: <RocketOutlined />,
+    label: '飞行作业',
+    children: [
+      { key: '/dashboard/drones', label: '设备' },
+      { key: '/dashboard/missions', label: '任务' },
+      { key: '/dashboard/streams', label: '视频' },
+    ],
+  },
+  {
+    key: 'grp-approval',
+    icon: <AuditOutlined />,
+    label: '报备审批',
+    children: [
+      { key: '/dashboard/approvals', label: '飞行审批' },
+      { key: '/dashboard/copilot-approvals', label: '审批中心' },
+    ],
+  },
+  {
+    key: 'grp-copilot',
+    icon: <RobotOutlined />,
+    label: 'Copilot',
+    children: [
+      { key: '/dashboard/copilot', label: 'Copilot' },
+      { key: '/dashboard/copilot-v2', label: 'Copilot v2' },
+      { key: '/dashboard/copilot-workflows', label: 'Workflow 编辑器' },
+      { key: '/dashboard/copilot-task-chain', label: 'Task Chain' },
+      { key: '/dashboard/copilot-history', label: 'Workflow 历史' },
+      { key: '/dashboard/copilot-traces', label: 'Copilot 追踪' },
+      { key: '/dashboard/copilot-tool-policy', label: '工具治理' },
+      { key: '/dashboard/copilot-memory', label: '长期记忆' },
+      { key: '/dashboard/copilot-approval-policy', label: '审批策略' },
+      { key: '/dashboard/copilot-marketplace', label: 'Copilot 市场' },
+    ],
+  },
+  {
+    key: 'grp-twin',
+    icon: <ThunderboltOutlined />,
+    label: '数字孪生',
+    children: [
+      { key: '/dashboard/scenes', label: '3DGS 场景' },
+      { key: '/dashboard/marketplace', label: '场景商店' },
+      { key: '/dashboard/model-marketplace', label: '模型商店' },
+    ],
+  },
+  {
+    key: 'grp-community',
+    icon: <FireOutlined />,
+    label: '社区',
+    children: [
+      { key: '/dashboard/community', label: '社区' },
+      { key: '/dashboard/moderation', label: '内容审核' },
+    ],
+  },
+  {
+    key: 'grp-security',
+    icon: <SafetyCertificateOutlined />,
+    label: '安全合规',
+    children: [
+      { key: '/dashboard/crypto-sm2', label: 'SM2 签名' },
+      { key: '/dashboard/audit-export', label: '审计导出' },
+      { key: '/dashboard/ciio', label: 'CIIO 自评' },
+    ],
+  },
+  {
+    key: 'grp-admin',
+    icon: <SettingOutlined />,
+    label: '管理',
+    children: [
+      { key: '/admin', label: '管理后台' },
+      { key: '/dashboard/settings', label: '设置' },
+    ],
+  },
 ];
+
+// 收集所有叶子路由 key（用于最长前缀匹配高亮）
+const leafKeys: string[] = [];
+const collectLeafKeys = (items: any[]) => {
+  items.forEach((i) => {
+    if (i.children) collectLeafKeys(i.children);
+    else if (typeof i.key === 'string' && i.key.startsWith('/')) leafKeys.push(i.key);
+  });
+};
+collectLeafKeys(menuItems);
+
+// 当前选中叶子所属分组（用于默认展开）
+const groupOf = (leaf: string): string[] => {
+  for (const item of menuItems as any[]) {
+    if (item.children?.some((c: any) => c.key === leaf)) return [item.key];
+  }
+  return [];
+};
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -153,8 +222,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   if (!mounted) return null;
 
   const selectedKey =
-    menuItems
-      .map((i) => i.key)
+    leafKeys
       .filter((k) => pathname === k || pathname.startsWith(k + '/'))
       .sort((a, b) => b.length - a.length)[0] || '/dashboard';
 
@@ -186,6 +254,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           theme="dark"
           mode="inline"
           selectedKeys={[selectedKey]}
+          defaultOpenKeys={groupOf(selectedKey)}
           items={menuItems}
           onClick={({ key }) => router.push(key)}
           style={{ background: 'transparent', borderRight: 0 }}
