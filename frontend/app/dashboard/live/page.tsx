@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Tag, Descriptions, Empty, Spin, message } from 'antd';
+import { Card, ConfigProvider, Tag, Descriptions, Empty, Spin, message, theme as antdTheme } from 'antd';
 import { EnvironmentOutlined } from '@ant-design/icons';
 import CesiumMap, { Trail, Waypoint, GeoFenceZone } from '@/components/CesiumMap';
 import SimControlPanel from '@/components/SimControlPanel';
@@ -104,6 +104,12 @@ export default function LiveMapPage() {
   );
 
   return (
+    <ConfigProvider
+      theme={{
+        algorithm: antdTheme.darkAlgorithm,
+        token: { colorPrimary: '#2b7fff', colorBgContainer: '#111a2c', borderRadius: 8 },
+      }}
+    >
     <div
       style={{
         position: 'fixed',
@@ -124,7 +130,7 @@ export default function LiveMapPage() {
               justifyContent: 'center',
             }}
           >
-            <Empty description={<span style={{ color: '#8b949e' }}>暂无在线设备</span>} />
+            <Empty description={<span style={{ color: '#9fb8e0' }}>暂无在线设备</span>} />
           </div>
         ) : (
           <div style={{ position: 'relative', width: '100%', height: '100%' }}>
@@ -191,9 +197,9 @@ export default function LiveMapPage() {
                 bottom: 16,
                 left: '50%',
                 transform: 'translateX(-50%)',
-                background: 'rgba(13, 17, 23, 0.85)',
-                border: '1px solid #21262d',
-                borderRadius: 6,
+                background: 'rgba(17, 26, 44, 0.88)',
+                border: '1px solid #1e2c4a',
+                borderRadius: 8,
                 padding: '8px 16px',
                 color: '#e6edf3',
                 display: 'flex',
@@ -237,12 +243,14 @@ export default function LiveMapPage() {
                   bottom: 70,
                   left: 16,
                   width: 300,
-                  background: 'rgba(13, 17, 23, 0.9)',
-                  border: '1px solid #21262d',
+                  background: 'rgba(17, 26, 44, 0.92)',
+                  border: '1px solid #1e2c4a',
                   zIndex: 10,
                 }}
-                headStyle={{ color: '#e6edf3', borderBottom: '1px solid #21262d' }}
-                bodyStyle={{ color: '#e6edf3' }}
+                styles={{
+                  header: { color: '#e6f0ff', borderBottom: '1px solid #1e2c4a' },
+                  body: { color: '#e6f0ff' },
+                }}
               >
                 <Descriptions column={1} size="small" labelStyle={{ color: '#8b949e' }}>
                   <Descriptions.Item label="纬度">
@@ -264,5 +272,6 @@ export default function LiveMapPage() {
         )}
       </Spin>
     </div>
+    </ConfigProvider>
   );
 }
