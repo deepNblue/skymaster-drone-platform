@@ -180,6 +180,33 @@ npm run build
 npm start
 ```
 
+#### 视频墙开发环境（无 docker）
+
+前端视频墙 `/dashboard/video-wall` 依赖 MediaMTX 流媒体服务与无人机推流。无真机时，
+用合成流（ffmpeg lavfi）模拟无人机相机，一条命令起整条链路：
+
+```bash
+# 前置：后端 dev 栈已启动、FAKE-SIM-01/02 已 seed（scripts/seed_drones.py）
+scripts/dev_video_stack.sh          # = start，幂等，已在跑的组件自动跳过
+scripts/dev_video_stack.sh status   # 查看各组件状态
+scripts/dev_video_stack.sh stop     # 停 watchdog + ffmpeg + mediamtx
+```
+
+链路与约定：
+
+```
+ffmpeg lavfi (testsrc2/smptebars)
+  -> RTSP rtsp://127.0.0.1:8554/drone-{uuid}
+  -> MediaMTX (HLS :8888, API :9997)
+  -> 后端 /api/v1/streams 按 "drone-{uuid}" 路径自动绑定无人机
+  -> 前端视频墙零配置自动上墙
+```
+
+- MediaMTX 二进制位于 `~/tools/mediamtx`，配置 `~/tools/mediamtx.yml`；
+  已开启 `hlsAlwaysRemux: yes`（避免无观看者 60s 后 HLS muxer 销毁导致前端冷启动 404）
+- 推流看门狗 `scripts/dev_video_push_watchdog.sh` 在 RTSP 会话断开后自动重推
+- 踩坑备注见脚本头部注释（ffmpeg 8.x 无 `-stimeout`、bash 只读 `UID`、系统 python3 无 asyncpg）
+
 ---
 
 ## 📖 使用指南
