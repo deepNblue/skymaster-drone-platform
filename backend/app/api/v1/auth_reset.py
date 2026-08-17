@@ -17,9 +17,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 from sqlalchemy import select, delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.schemas.types import EmailStr
 
 from app.db import get_db
 from app.models.password_reset_token import PasswordResetToken

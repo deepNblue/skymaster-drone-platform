@@ -2,7 +2,7 @@
 
 Creates:
   * 1 Organization named "TestOrg"
-  * 1 admin User (email=admin@skymaster.cn, password=admin123, role=admin)
+  * 1 admin User (email=$SEED_EMAIL or admin@test.local, password=admin123, role=admin)
 
 Both are upserted — running the script twice is safe.
 
@@ -33,9 +33,9 @@ apply_sqlite_compat()
 
 
 SEED_ORG_NAME = "TestOrg"
-SEED_USER_EMAIL = "admin@skymaster.cn"
-SEED_USER_PASSWORD = "admin123"
-SEED_USER_ROLE = "admin"
+SEED_USER_EMAIL = os.getenv("SEED_EMAIL", "admin@test.local")
+SEED_USER_PASSWORD = os.getenv("SEED_PASS", "admin123")
+SEED_USER_ROLE = os.getenv("SEED_ROLE", "admin")
 
 
 async def seed() -> dict[str, Any]:

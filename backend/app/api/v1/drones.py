@@ -159,10 +159,12 @@ async def drone_track(
             "lat": float(r[1]),
             "lng": float(r[2]),
             "alt": float(r[3]) if r[3] is not None else 100.0,
+            "ts": r[0].isoformat() if hasattr(r[0], "isoformat") else str(r[0]),
         }
         for r in rows
     ]
-    return {"trail": trail, "points": len(trail), "seconds": seconds}
+    latest_ts = trail[-1]["ts"] if trail else None
+    return {"trail": trail, "points": len(trail), "seconds": seconds, "latest_ts": latest_ts}
 
 
 @router.get("", response_model=dict)

@@ -17,9 +17,11 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.schemas.types import EmailStr
 
 from app.db import get_db
 from app.deps import Role, require_min_role, get_current_user
