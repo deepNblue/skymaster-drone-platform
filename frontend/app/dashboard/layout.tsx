@@ -40,6 +40,7 @@ const { Text } = Typography;
 const menuItems = [
   { key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
   { key: '/dashboard/cockpit', icon: <ThunderboltOutlined />, label: '监控大屏' },
+  { key: '/dashboard/video-wall', icon: <AppstoreOutlined />, label: '视频九宫格' },
   { key: '/dashboard/live', icon: <GlobalOutlined />, label: '态势' },
   {
     key: 'grp-flight',
