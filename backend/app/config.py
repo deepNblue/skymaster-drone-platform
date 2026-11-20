@@ -35,6 +35,20 @@ class Settings(BaseSettings):
     mavlink_endpoint: str = "udpin:0.0.0.0:14550"
     telemetry_publish_ms: int = 500
 
+    # --- DJI Cloud API v2 -------------------------------------------------
+    # mode: "mock" (default, no hardware) or "cloud" (real Dock/Pilot MQTT).
+    # Credentials come from DJI developer portal — set via env, never hard-code.
+    dji_mode: str = "mock"
+    dji_gateway_sn: str = "MOCKDOCK001"
+    dji_broker_host: str = "127.0.0.1"
+    dji_broker_port: int = 1883
+    dji_client_id: str = ""
+    dji_username: str = ""
+    dji_password: str = ""
+    dji_mock_start_lat: float = 22.8167
+    dji_mock_start_lng: float = 108.3167
+    dji_mock_drones: int = 1
+
     # --- MediaMTX (video streaming) --------------------------------------
     mediamtx_api_url: str = "http://mediamtx:9997"
     mediamtx_hls_url_base: str = "http://mediamtx:8888"
