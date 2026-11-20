@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     dji_mock_start_lat: float = 22.8167
     dji_mock_start_lng: float = 108.3167
     dji_mock_drones: int = 1
+    # Empty = use backend/config/dji_calibration.json and backend/data/dji_rc_calibration.json
+    dji_calibration_config: str = ""
+    dji_rc_calibration_file: str = ""
 
     # --- MediaMTX (video streaming) --------------------------------------
     mediamtx_api_url: str = "http://mediamtx:9997"

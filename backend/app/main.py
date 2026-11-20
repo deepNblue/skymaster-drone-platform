@@ -136,6 +136,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     mock_start_lat=getattr(settings, "dji_mock_start_lat", 22.8167),
                     mock_start_lng=getattr(settings, "dji_mock_start_lng", 108.3167),
                     mock_drones=len(_dji_map),
+                    calibration_config_path=getattr(
+                        settings, "dji_calibration_config", "") or None,
+                    rc_calibration_path=getattr(
+                        settings, "dji_rc_calibration_file", "") or None,
                 )
                 try:
                     _dji.connect()

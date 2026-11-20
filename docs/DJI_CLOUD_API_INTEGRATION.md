@@ -29,8 +29,9 @@
 
 ```bash
 cd backend
-.venv/bin/python -m pytest tests/test_dji_cloud_connector.py -q
-# 24 passed（含 DRC 打包/解包、指数退避、断线状态、启动栈映射）
+.venv/bin/python -m pytest tests/test_dji_cloud_connector.py tests/test_dji_calibration.py \
+  tests/test_dji_api.py tests/test_dji_calibration_api.py -q
+# 46 passed（含 DRC 打包/解包、指数退避、校准状态机、RC 死区映射、API 边界校验）
 ```
 
 ## 真机启用步骤（硬件到位后）
@@ -87,9 +88,39 @@ connector.send_drc("MOCKM300-01", throttle=0.5, yaw=0.1, pitch=0.0, roll=-0.2)
 
 ⚠️ DRC 是真飞控指令，真机模式下 `throttle/pitch/roll` 直接驱动电机——接入真机前务必先在 DJI 模拟器或安全空域验证轴方向与量程映射。
 
+## 校准中心（`/dashboard/calibration`，导航「校准中心」）
+
+**参数独立文件**：校准时长、提示文案、九步采集序列、默认死区全部在
+`backend/config/dji_calibration.json`；代码不硬编码。摇杆采集结果写入
+`backend/data/dji_rc_calibration.json`，可用 `DJI_CALIBRATION_CONFIG` /
+`DJI_RC_CALIBRATION_FILE` 环境变量覆盖路径。
+
+传感器校准（指南针 / IMU / 云台 / 视觉定位）：前端 1.5s 轮询状态机，
+`mock` 模式按 tick 推进进度至 `success`，真机模式由 `services_reply` 调
+`update_calibration()` 推进。摇杆九点采集：左杆油门/偏航 + 右杆俯仰/横滚，
+依次采集 8 个极值与中位，保存每轴 `min/center/max`，`apply_rc_axis()`
+按正/负半轴分别缩放并套用死区。
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/v1/dji/calibration/status?drone_sn=` | 校准项定义、各机状态机、已保存 RC 参数、完整配置 |
+| `POST /api/v1/dji/calibration/start` | `{drone_sn, item}` 启动传感器校准 / 打开 RC 向导 |
+| `POST /api/v1/dji/calibration/cancel` | `{drone_sn, item}` 取消进行中的校准 |
+| `POST /api/v1/dji/calibration/rc` | `{drone_sn, axes, deadzone?}` 保存九点采集结果 |
+
+代码直调：
+
+```python
+connector.start_calibration("MOCKM300-01", "compass")
+connector.mock_tick(6)   # 12s 配置 → progress 50%
+connector.set_rc_calibration("MOCKM300-01", axes)
+connector.apply_rc_axis("MOCKM300-01", "throttle", 0.5)
+```
+
 ## 已知限制
 
 - `mode="cloud"` 尚未做 MQTT TLS/clientAuth 配置（真机 8883 端口需要）
 - OSD→canonical 映射覆盖主要字段，云台/负载/告警字段待按需扩展
 - 航线是 waypoint 列表骨架，非 WPML KMZ；断点续飞 (`flighttask_progress`) 未实现
 - DRC 已实现指令下发、四轴打包与前端摇杆面板；飞控闭环（读 DRC reply + 状态回传）待真机联调
+- 校准项通过 `thing/product/{sn}/services` 的 `calibration` 方法下发；真机方法名/参数需按固件物模型核对。cloud 模式的 `services_reply` → `update_calibration()` 自动绑定尚未接上（骨架已预留）

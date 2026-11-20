@@ -43,6 +43,7 @@ import json
 import logging
 import math
 import os
+from pathlib import Path
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional
@@ -76,6 +77,13 @@ METHOD_TASK_PROGRESS = "flighttask_progress"
 METHOD_LIVE_START = "live_start_push"
 METHOD_LIVE_STOP = "live_stop_push"
 METHOD_RTL = "return_home"
+METHOD_CALIBRATION = "calibration"
+
+RC_AXES = ("throttle", "yaw", "pitch", "roll")
+RC_CALIBRATION_ITEM = "rc"
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CALIBRATION_CONFIG = _BACKEND_ROOT / "config" / "dji_calibration.json"
+DEFAULT_RC_CALIBRATION_FILE = _BACKEND_ROOT / "data" / "dji_rc_calibration.json"
 
 # Canonical telemetry keys shared with MavlinkConnector._slot().
 _TELEMETRY_KEYS = (
@@ -186,6 +194,8 @@ class DJICloudConnector:
         mock_start_lat: float = 22.8167,
         mock_start_lng: float = 108.3167,
         mock_drones: int = 1,
+        calibration_config_path: Optional[str] = None,
+        rc_calibration_path: Optional[str] = None,
     ) -> None:
         if mode not in ("mock", "cloud"):
             raise ValueError(f"invalid DJI connector mode: {mode!r}")
@@ -219,6 +229,14 @@ class DJICloudConnector:
         self._reconnect_cap_s = 60.0
         self._reconnect_base_s = 1.0
         self.last_drc: Dict[str, Dict[str, float]] = {}
+
+        # --- calibration (config-driven, no hardcoded durations/deadzone) ---
+        self.calibration_config: Dict[str, Any] = self._load_calibration_config(
+            calibration_config_path)
+        self.rc_calibration_path = Path(
+            rc_calibration_path or DEFAULT_RC_CALIBRATION_FILE)
+        self._calibration: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self._rc_calibration: Dict[str, Dict[str, Any]] = self._load_rc_calibration()
 
     # ---------------------------------------------------------------- topics
     def topic(self, template: str, sn: Optional[str] = None) -> str:
@@ -403,6 +421,179 @@ class DJICloudConnector:
         info = self._client.publish(topic, json.dumps(msg), qos=0)
         return info.rc == mqtt.MQTT_ERR_SUCCESS  # type: ignore[union-attr]
 
+    # ---------------------------------------------------------- calibration
+    @staticmethod
+    def _load_calibration_config(path: Optional[str] = None) -> Dict[str, Any]:
+        """Load sensor durations and RC wizard steps from the standalone JSON."""
+        cfg_path = Path(path or DEFAULT_CALIBRATION_CONFIG)
+        try:
+            with cfg_path.open("r", encoding="utf-8") as fh:
+                cfg = json.load(fh)
+            if not isinstance(cfg, dict):
+                raise ValueError("calibration config must be a JSON object")
+            return cfg
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "calibration config %s unavailable: %s; using empty defaults",
+                cfg_path, exc)
+            return {
+                "sensor_calibration": {},
+                "rc_calibration": {"deadzone": 0.05, "steps": []},
+            }
+
+    def _load_rc_calibration(self) -> Dict[str, Dict[str, Any]]:
+        try:
+            with self.rc_calibration_path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {}
+
+    def _save_rc_calibration(self) -> None:
+        self.rc_calibration_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.rc_calibration_path.with_suffix(".json.tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
+            json.dump(self._rc_calibration, fh, ensure_ascii=False, indent=2)
+        tmp.replace(self.rc_calibration_path)
+
+    def calibration_items(self) -> List[Dict[str, Any]]:
+        """Sensor calibration items plus the manual RC wizard entry."""
+        items: List[Dict[str, Any]] = []
+        for key, meta in (self.calibration_config.get("sensor_calibration") or {}).items():
+            items.append({
+                "key": key, "kind": "sensor",
+                "label": meta.get("label", key),
+                "duration_s": meta.get("duration_s", 0),
+                "hint": meta.get("hint", ""),
+            })
+        items.append({
+            "key": RC_CALIBRATION_ITEM, "kind": "rc", "label": "遥控器摇杆",
+            "duration_s": 0, "hint": "按向导采集四轴极值与中位",
+        })
+        return items
+
+    def calibration_status(self, drone_sn: Optional[str] = None) -> Dict[str, Any]:
+        if drone_sn:
+            sensors = {drone_sn: {
+                item: dict(state)
+                for item, state in self._calibration.get(drone_sn, {}).items()
+            }}
+        else:
+            sensors = {
+                sn: {item: dict(state) for item, state in items.items()}
+                for sn, items in self._calibration.items()
+            }
+        return {
+            "items": self.calibration_items(),
+            "sensors": sensors,
+            "rc": self._rc_calibration,
+            "config": self.calibration_config,
+        }
+
+    def start_calibration(self, drone_sn: str, item: str) -> bool:
+        """Start a sensor calibration, or open the manual RC wizard."""
+        state = self._calibration.setdefault(drone_sn, {})
+        if item == RC_CALIBRATION_ITEM:
+            state[item] = {
+                "state": "manual", "progress": 0,
+                "message": "等待摇杆六方向采集", "updated_at": time.time(),
+            }
+            return True
+        meta = (self.calibration_config.get("sensor_calibration") or {}).get(item)
+        if meta is None:
+            logger.warning("start_calibration: unknown item %r", item)
+            return False
+        state[item] = {
+            "state": "running", "progress": 0,
+            "duration_s": float(meta.get("duration_s", 10)),
+            "message": meta.get("hint", ""),
+            "started_at": time.time(), "updated_at": time.time(),
+        }
+        return self.publish_service(METHOD_CALIBRATION, {
+            "drone_sn": drone_sn, "item": item, "action": "start",
+        })
+
+    def cancel_calibration(self, drone_sn: str, item: str) -> bool:
+        state = self._calibration.get(drone_sn, {}).get(item)
+        if state is None:
+            return False
+        state.update(state="cancelled", progress=0, message="已取消",
+                     updated_at=time.time())
+        self.publish_service(METHOD_CALIBRATION, {
+            "drone_sn": drone_sn, "item": item, "action": "cancel",
+        })
+        return True
+
+    def update_calibration(self, drone_sn: str, item: str, *, state: str,
+                           progress: Optional[float] = None,
+                           message: str = "") -> None:
+        """Apply a services_reply progress update (cloud mode)."""
+        slot = self._calibration.setdefault(drone_sn, {}).setdefault(item, {})
+        slot["state"] = state
+        if progress is not None:
+            slot["progress"] = max(0.0, min(100.0, float(progress)))
+        slot["message"] = message
+        slot["updated_at"] = time.time()
+
+    def set_rc_calibration(self, drone_sn: str,
+                           axes: Dict[str, Dict[str, float]],
+                           deadzone: Optional[float] = None) -> bool:
+        """Persist RC stick endpoints to a standalone JSON and mark RC done."""
+        if any(axis not in axes for axis in RC_AXES):
+            return False
+        rc_cfg = self.calibration_config.get("rc_calibration") or {}
+        dz = rc_cfg.get("deadzone", 0.05) if deadzone is None else deadzone
+        self._rc_calibration[drone_sn] = {
+            "axes": {
+                axis: {
+                    "min": float(axes[axis]["min"]),
+                    "center": float(axes[axis]["center"]),
+                    "max": float(axes[axis]["max"]),
+                }
+                for axis in RC_AXES
+            },
+            "deadzone": float(dz),
+            "updated_at": time.time(),
+        }
+        self._save_rc_calibration()
+        state = self._calibration.setdefault(drone_sn, {}).setdefault(
+            RC_CALIBRATION_ITEM, {})
+        state.update(state="success", progress=100, message="摇杆校准已保存",
+                     updated_at=time.time())
+        return True
+
+    def apply_rc_axis(self, drone_sn: str, axis: str, raw: float) -> float:
+        """Map a raw stick value through saved endpoints and deadzone."""
+        saved = self._rc_calibration.get(drone_sn) or {}
+        cal = (saved.get("axes") or {}).get(axis)
+        if cal is None or cal["max"] <= cal["min"]:
+            return max(-1.0, min(1.0, float(raw)))
+        center = float(cal["center"])
+        span = (cal["max"] - center) if float(raw) >= center else (center - cal["min"])
+        if span <= 0:
+            return 0.0
+        v = (float(raw) - center) / span
+        dz = float(saved.get("deadzone", 0.0))
+        if abs(v) < dz:
+            return 0.0
+        return round(max(-1.0, min(1.0, v)), 4)
+
+    def _advance_calibration(self, dt: float) -> None:
+        """Advance mock sensor calibration progress."""
+        for items in self._calibration.values():
+            for state in items.values():
+                if state.get("state") != "running":
+                    continue
+                duration = float(state.get("duration_s", 0) or 0)
+                if duration <= 0:
+                    continue
+                state["progress"] = min(
+                    100.0, float(state.get("progress", 0)) + dt / duration * 100.0)
+                state["updated_at"] = time.time()
+                if state["progress"] >= 100.0:
+                    state.update(state="success", message="校准完成",
+                                 updated_at=time.time())
+
     # -------------------------------------------------------------- parsing
     def parse_osd(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Map a DJI OSD payload to SkyMaster's canonical telemetry slot."""
@@ -469,10 +660,13 @@ class DJICloudConnector:
             self._mock_state[sn] = "RETURN_TO_HOME"
         elif method == METHOD_LIVE_START:
             self._mock_state[sn] = "LIVE"
+        elif method == METHOD_CALIBRATION:
+            logger.info("[MOCK] calibration %s for %s", data.get("item"), sn)
 
     def mock_tick(self, dt: float = 0.5) -> List[Dict[str, Any]]:
         """Advance mock simulation by ``dt`` seconds; return OSD payloads."""
         self._mock_t += dt
+        self._advance_calibration(dt)
         frames = []
         for i in range(self.mock_drones):
             osd = self._mock_osd(i)

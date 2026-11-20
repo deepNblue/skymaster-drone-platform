@@ -6,6 +6,7 @@ import {
   DashboardOutlined,
   RocketOutlined,
   AimOutlined,
+  ToolOutlined,
   VideoCameraOutlined,
   GlobalOutlined,
   AuditOutlined,
@@ -43,6 +44,7 @@ const menuItems = [
   { key: '/dashboard/video-wall', icon: <AppstoreOutlined />, label: '视频九宫格' },
   { key: '/dashboard/live', icon: <GlobalOutlined />, label: '态势' },
   { key: '/dashboard/dji-control', icon: <AimOutlined />, label: 'DJI 摇杆' },
+  { key: '/dashboard/calibration', icon: <ToolOutlined />, label: '校准中心' },
   {
     key: 'grp-flight',
     icon: <RocketOutlined />,

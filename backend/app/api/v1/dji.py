@@ -49,6 +49,23 @@ class ActionBody(BaseModel):
     waypoints: Optional[List[Dict[str, float]]] = None
 
 
+class RCAxisBody(BaseModel):
+    min: float = Field(..., ge=-1.0, le=1.0)
+    center: float = Field(..., ge=-1.0, le=1.0)
+    max: float = Field(..., ge=-1.0, le=1.0)
+
+
+class RCCalibrationBody(BaseModel):
+    drone_sn: str
+    axes: Dict[str, RCAxisBody]
+    deadzone: Optional[float] = Field(None, ge=0.0, le=0.5)
+
+
+class CalibrationBody(BaseModel):
+    drone_sn: str
+    item: str = Field(..., description="compass | imu | gimbal | vision | rc")
+
+
 @router.get("/status")
 async def dji_status(
     request: Request,
@@ -127,3 +144,75 @@ async def send_action(
     if not ok:
         raise HTTPException(status_code=503, detail="MQTT not connected — action not sent")
     return {"ok": True, "action": action, "drone_sn": body.drone_sn}
+
+
+@router.get("/calibration/status")
+async def calibration_status(
+    request: Request,
+    drone_sn: Optional[str] = None,
+    user: User = Depends(get_current_user_optional),
+) -> Dict[str, Any]:
+    """Calibration items, per-aircraft state machine and saved RC endpoints."""
+    conn = _connector(request)
+    return conn.calibration_status(drone_sn)
+
+
+@router.post("/calibration/start")
+async def calibration_start(
+    body: CalibrationBody,
+    request: Request,
+    user: User = Depends(get_current_user_optional),
+) -> Dict[str, Any]:
+    conn = _connector(request)
+    valid = {i["key"] for i in conn.calibration_items()}
+    if body.item not in valid:
+        raise HTTPException(status_code=422, detail=f"unknown calibration item: {body.item}")
+    ok = conn.start_calibration(body.drone_sn, body.item)
+    if not ok:
+        raise HTTPException(status_code=503, detail="calibration command not sent")
+    return {"ok": True, "drone_sn": body.drone_sn, "item": body.item}
+
+
+@router.post("/calibration/cancel")
+async def calibration_cancel(
+    body: CalibrationBody,
+    request: Request,
+    user: User = Depends(get_current_user_optional),
+) -> Dict[str, Any]:
+    conn = _connector(request)
+    ok = conn.cancel_calibration(body.drone_sn, body.item)
+    if not ok:
+        raise HTTPException(status_code=404, detail="no active calibration to cancel")
+    return {"ok": True, "drone_sn": body.drone_sn, "item": body.item}
+
+
+@router.post("/calibration/rc")
+async def calibration_rc(
+    body: RCCalibrationBody,
+    request: Request,
+    user: User = Depends(get_current_user_optional),
+) -> Dict[str, Any]:
+    """Save RC endpoints captured by the calibration wizard."""
+    conn = _connector(request)
+    from app.services.dji_cloud_connector import RC_AXES
+
+    axes: Dict[str, Dict[str, float]] = {}
+    for axis in RC_AXES:
+        entry = body.axes.get(axis)
+        if entry is None:
+            raise HTTPException(status_code=422, detail=f"missing axis: {axis}")
+        if not (entry.min < entry.center < entry.max):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{axis}: require min < center < max",
+            )
+        axes[axis] = {"min": entry.min, "center": entry.center, "max": entry.max}
+    ok = conn.set_rc_calibration(body.drone_sn, axes, body.deadzone)
+    if not ok:
+        raise HTTPException(status_code=422, detail="invalid RC calibration payload")
+    return {
+        "ok": True,
+        "drone_sn": body.drone_sn,
+        "deadzone": conn._rc_calibration[body.drone_sn]["deadzone"],
+        "axes": axes,
+    }
