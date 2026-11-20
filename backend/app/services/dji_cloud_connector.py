@@ -46,7 +46,7 @@ import os
 from pathlib import Path
 import time
 import uuid
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:  # soft dep — mock mode needs nothing
     import paho.mqtt.client as mqtt  # type: ignore[import-untyped]
@@ -229,6 +229,8 @@ class DJICloudConnector:
         self._reconnect_cap_s = 60.0
         self._reconnect_base_s = 1.0
         self.last_drc: Dict[str, Dict[str, float]] = {}
+        # cloud mode: correlate services_reply -> (drone_sn, calibration item)
+        self._pending_calibration: Dict[str, Tuple[str, str]] = {}
 
         # --- calibration (config-driven, no hardcoded durations/deadzone) ---
         self.calibration_config: Dict[str, Any] = self._load_calibration_config(
@@ -335,12 +337,123 @@ class DJICloudConnector:
             self.topology = data
         elif msg.topic.endswith("/osd"):
             self.parse_osd(data)
+        elif msg.topic.endswith("/services_reply"):
+            self._handle_services_reply(payload, topic=msg.topic)
+
+    # --------------------------------------------------- services reply
+    def _resolve_calibration_reply(
+        self, topic: str, payload: Dict[str, Any],
+    ) -> Optional[Tuple[str, str]]:
+        """Return (drone_sn, item) if payload is a calibration services_reply.
+
+        Device replies do not always echo ``item`` / ``drone_sn``, so requests
+        are correlated by ``bid`` / ``tid`` when those fields are present.
+        """
+        data = payload.get("data") or {}
+        if not isinstance(data, dict):
+            return None
+        method = str(payload.get("method") or data.get("method") or "")
+        is_calibration = "calibrat" in method.lower()
+
+        pending = None
+        for key in ("bid", "tid"):
+            corr = payload.get(key)
+            if corr and corr in self._pending_calibration:
+                pending = self._pending_calibration[corr]
+                break
+        if not (is_calibration or pending):
+            return None
+
+        sn = data.get("drone_sn") or data.get("sn") or data.get("device_sn")
+        item = data.get("item") or data.get("calibration_item")
+        if pending is not None:
+            sn = sn or pending[0]
+            item = item or pending[1]
+            # bid and tid point to the same tuple object — drop both entries.
+            for key, value in list(self._pending_calibration.items()):
+                if value is pending:
+                    del self._pending_calibration[key]
+        if not sn or not item:
+            return None
+        return str(sn), str(item)
+
+    @staticmethod
+    def _parse_calibration_progress(
+        data: Dict[str, Any],
+    ) -> Tuple[str, float, str]:
+        """Map a device calibration reply to (state, progress, message)."""
+        result = data.get("result", data.get("code"))
+        message = str(data.get("message") or data.get("msg")
+                      or data.get("reason") or "")
+        raw_progress = data.get("progress")
+        try:
+            progress = float(raw_progress) if raw_progress is not None else 0.0
+        except (TypeError, ValueError):
+            progress = 0.0
+        if 0 < progress <= 1.0:  # some devices report 0..1 instead of 0..100
+            progress *= 100.0
+        progress = max(0.0, min(100.0, progress))
+
+        if result not in (None, 0, "0", "success", "ok", "OK"):
+            return "failed", progress, message or f"device result={result}"
+
+        state_raw = data.get("state", data.get("status",
+                             data.get("calibration_state")))
+        if isinstance(state_raw, str):
+            state_map = {
+                "idle": "idle", "pending": "idle", "ready": "idle",
+                "running": "running", "in_progress": "running",
+                "calibrating": "running", "doing": "running",
+                "success": "success", "succeed": "success", "done": "success",
+                "complete": "success", "completed": "success",
+                "failed": "failed", "fail": "failed", "error": "failed",
+                "cancelled": "cancelled", "canceled": "cancelled",
+            }
+            state = state_map.get(state_raw.lower(), state_raw.lower())
+        elif state_raw is not None:
+            try:
+                code = int(state_raw)
+                state = {0: "idle", 1: "running", 2: "success",
+                         3: "failed", 4: "cancelled"}.get(code, "running")
+            except (TypeError, ValueError):
+                state = "running"
+        else:
+            state = "running" if progress < 100 else "success"
+
+        if progress >= 100 and state not in ("failed", "cancelled"):
+            state = "success"
+        return state, progress, message
+
+    def _handle_services_reply(
+        self, payload: Dict[str, Any], topic: str = "",
+    ) -> None:
+        """Route a DJI services_reply to the calibration state machine."""
+        resolved = self._resolve_calibration_reply(topic, payload)
+        if resolved is None:
+            return
+        sn, item = resolved
+        data = payload.get("data") or {}
+        state, progress, message = self._parse_calibration_progress(data)
+        self.update_calibration(
+            sn, item, state=state, progress=progress, message=message)
+        logger.info(
+            "DJI calibration reply: sn=%s item=%s state=%s progress=%.1f%%",
+            sn, item, state, progress)
 
     # ------------------------------------------------------------- commands
     def publish_service(self, method: str, data: Dict[str, Any]) -> bool:
         """Send a cloud -> device service call on ``thing/product/{sn}/services``."""
         topic = self.topic(TOPIC_SERVICES)
         msg = envelope(method, data)
+        if method == METHOD_CALIBRATION and self.mode == "cloud":
+            # Replies may omit item/drone_sn; keep both correlation ids so the
+            # reply handler can recover which aircraft/item was commanded.
+            pending = (
+                str(data.get("drone_sn") or self.gateway_sn),
+                str(data.get("item") or ""),
+            )
+            self._pending_calibration[msg["bid"]] = pending
+            self._pending_calibration[msg["tid"]] = pending
         if self.mode == "mock":
             self._handle_mock_service(method, data)
             logger.info("[MOCK] DJI service %s -> %s", method, topic)

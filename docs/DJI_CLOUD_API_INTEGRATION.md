@@ -30,8 +30,9 @@
 ```bash
 cd backend
 .venv/bin/python -m pytest tests/test_dji_cloud_connector.py tests/test_dji_calibration.py \
-  tests/test_dji_api.py tests/test_dji_calibration_api.py -q
-# 46 passed（含 DRC 打包/解包、指数退避、校准状态机、RC 死区映射、API 边界校验）
+  tests/test_dji_calibration_reply.py tests/test_dji_api.py \
+  tests/test_dji_calibration_api.py -q
+# 55 passed（含 DRC 打包/解包、指数退避、校准状态机、reply 路由、RC 死区映射、API 边界校验）
 ```
 
 ## 真机启用步骤（硬件到位后）
@@ -96,8 +97,20 @@ connector.send_drc("MOCKM300-01", throttle=0.5, yaw=0.1, pitch=0.0, roll=-0.2)
 `DJI_RC_CALIBRATION_FILE` 环境变量覆盖路径。
 
 传感器校准（指南针 / IMU / 云台 / 视觉定位）：前端 1.5s 轮询状态机，
-`mock` 模式按 tick 推进进度至 `success`，真机模式由 `services_reply` 调
-`update_calibration()` 推进。摇杆九点采集：左杆油门/偏航 + 右杆俯仰/横滚，
+`mock` 模式按 tick 推进进度至 `success`。
+
+**cloud 模式 reply 自动绑定**：`_on_mqtt_message()` 收到
+`thing/product/{sn}/services_reply` 后调用 `_handle_services_reply()`：
+- 校准项与飞机 SN 优先取 `data.item` / `data.drone_sn`；设备未回显时通过
+  请求记录的 `bid` / `tid` 关联恢复（关联在首次匹配后清除）
+- 状态映射：字符串 `running/in_progress/calibrating` → running，
+  `done/complete/success` → success，`failed/error` → failed，
+  `cancelled` → cancelled；数字按 0=idle / 1=running / 2=success /
+  3=failed / 4=cancelled
+- `progress` 支持 0..100 与 0..1 两种表示；`result/code` 非 0 直接判 failed
+  （失败优先于进度），`message/msg/reason` 写入状态说明
+
+摇杆九点采集：左杆油门/偏航 + 右杆俯仰/横滚，
 依次采集 8 个极值与中位，保存每轴 `min/center/max`，`apply_rc_axis()`
 按正/负半轴分别缩放并套用死区。
 
@@ -123,4 +136,4 @@ connector.apply_rc_axis("MOCKM300-01", "throttle", 0.5)
 - OSD→canonical 映射覆盖主要字段，云台/负载/告警字段待按需扩展
 - 航线是 waypoint 列表骨架，非 WPML KMZ；断点续飞 (`flighttask_progress`) 未实现
 - DRC 已实现指令下发、四轴打包与前端摇杆面板；飞控闭环（读 DRC reply + 状态回传）待真机联调
-- 校准项通过 `thing/product/{sn}/services` 的 `calibration` 方法下发；真机方法名/参数需按固件物模型核对。cloud 模式的 `services_reply` → `update_calibration()` 自动绑定尚未接上（骨架已预留）
+- 校准项通过 `thing/product/{sn}/services` 的 `calibration` 方法下发；真机方法名/参数需按固件物模型核对。`services_reply` → `update_calibration()` 已自动绑定，但状态枚举按 DJI 常见约定映射，真机联调时需按实际固件回包字段核对
