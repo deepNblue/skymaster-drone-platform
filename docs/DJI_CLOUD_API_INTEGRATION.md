@@ -31,8 +31,9 @@
 cd backend
 .venv/bin/python -m pytest tests/test_dji_drc_ack.py tests/test_dji_cloud_connector.py \
   tests/test_dji_calibration.py tests/test_dji_calibration_reply.py \
+  tests/test_dji_mission.py tests/test_dji_mission_api.py \
   tests/test_dji_api.py tests/test_dji_calibration_api.py -q
-# 65 passed（含 DRC 打包/回执、指数退避、校准状态机、reply 路由、RC 死区映射、API 边界校验）
+# 83 passed（含 DRC 回执、校准状态机与 reply、飞行任务状态机、RC 死区映射、API 边界校验）
 ```
 
 ## 真机启用步骤（硬件到位后）
@@ -132,10 +133,25 @@ connector.set_rc_calibration("MOCKM300-01", axes)
 connector.apply_rc_axis("MOCKM300-01", "throttle", 0.5)
 ```
 
+## 飞行任务（`/dashboard/mission`，导航「DJI 任务」）
+
+**参数独立文件**：`backend/config/dji_mission.json`（默认高度、航点上限、状态枚举映射、progress/result/task_id 字段名）与 `backend/config/dji_mission_routes.json`（三条南宁 12309 预设巡逻航线，绕开核心禁飞区并控制在限高 150m 内）。可用 `DJI_MISSION_CONFIG` / `DJI_MISSION_ROUTES` 环境变量覆盖路径。
+
+**状态机**：`prepared → running ↔ paused → success / failed / cancelled`。`create_mission()` 返回 task_id 并记录每机最新任务；`execute / pause / resume / cancel` 用 task_id 或飞机 SN 关联，下发时携带 `drone_sn` 以便多机正确路由。mock 每 tick 推进一个航点并计算百分比，飞完自动 `success`；cloud 解析 `flighttask_progress`：进度兼容 0..100 与 0..1，状态支持字符串/数字枚举，`result/code` 非 0 判失败（失败优先），task_id 缺失时按 SN 回退关联。
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/v1/dji/mission/routes` | 预设航线列表 |
+| `GET /api/v1/dji/mission/status?drone_sn=&task_id=` | 任务状态机、航线与配置 |
+| `POST /api/v1/dji/mission/prepare` | `{drone_sn, route_id? , waypoints?}` 下发任务，返回 task_id |
+| `POST /api/v1/dji/mission/control` | `{task_id, action: execute\|pause\|resume\|cancel}` 控制任务 |
+
+前端页面提供航线卡片选择、航点表格、任务进度与操作日志；执行完成后显示「航线执行完成」。旧端点 `POST /dji/action` 的 `mission` 动作保留兼容，内部已改用真实 task_id（不再硬编码 `api-task`）。
+
 ## 已知限制
 
 - `mode="cloud"` 尚未做 MQTT TLS/clientAuth 配置（真机 8883 端口需要）
 - OSD→canonical 映射覆盖主要字段，云台/负载/告警字段待按需扩展
-- 航线是 waypoint 列表骨架，非 WPML KMZ；断点续飞 (`flighttask_progress`) 未实现
+- 航线仍是 waypoint 列表骨架，非 WPML KMZ；断点续飞未实现（`flighttask_progress` 已用于进度状态回传，不等于断点续飞）
 - DRC 已实现指令下发、四轴打包、序列号回执闭环（含延迟/超时状态）与前端摇杆面板；真机回包字段与延迟阈值需按固件联调核对
 - 校准项通过 `thing/product/{sn}/services` 的 `calibration` 方法下发；真机方法名/参数需按固件物模型核对。`services_reply` → `update_calibration()` 已自动绑定，但状态枚举按 DJI 常见约定映射，真机联调时需按实际固件回包字段核对

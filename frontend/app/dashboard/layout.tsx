@@ -45,6 +45,7 @@ const menuItems = [
   { key: '/dashboard/live', icon: <GlobalOutlined />, label: '态势' },
   { key: '/dashboard/dji-control', icon: <AimOutlined />, label: 'DJI 摇杆' },
   { key: '/dashboard/calibration', icon: <ToolOutlined />, label: '校准中心' },
+  { key: '/dashboard/mission', icon: <RocketOutlined />, label: 'DJI 任务' },
   {
     key: 'grp-flight',
     icon: <RocketOutlined />,

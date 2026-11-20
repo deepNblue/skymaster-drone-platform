@@ -85,6 +85,8 @@ _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CALIBRATION_CONFIG = _BACKEND_ROOT / "config" / "dji_calibration.json"
 DEFAULT_RC_CALIBRATION_FILE = _BACKEND_ROOT / "data" / "dji_rc_calibration.json"
 DEFAULT_CONTROL_CONFIG = _BACKEND_ROOT / "config" / "dji_control.json"
+DEFAULT_MISSION_CONFIG = _BACKEND_ROOT / "config" / "dji_mission.json"
+DEFAULT_MISSION_ROUTES = _BACKEND_ROOT / "config" / "dji_mission_routes.json"
 
 # Canonical telemetry keys shared with MavlinkConnector._slot().
 _TELEMETRY_KEYS = (
@@ -198,6 +200,8 @@ class DJICloudConnector:
         calibration_config_path: Optional[str] = None,
         rc_calibration_path: Optional[str] = None,
         control_config_path: Optional[str] = None,
+        mission_config_path: Optional[str] = None,
+        mission_routes_path: Optional[str] = None,
     ) -> None:
         if mode not in ("mock", "cloud"):
             raise ValueError(f"invalid DJI connector mode: {mode!r}")
@@ -250,6 +254,14 @@ class DJICloudConnector:
         self.last_drc_ack: Dict[str, Dict[str, Any]] = {}
         self._mock_state: Dict[str, str] = {}
         self._mock_mission: Dict[str, Dict[str, Any]] = {}
+
+        # --- flight task state machine (config-driven) --------------------
+        self.mission_config: Dict[str, Any] = self._load_json_config(
+            mission_config_path, DEFAULT_MISSION_CONFIG, "mission config")
+        self._mission_routes: List[Dict[str, Any]] = self._load_mission_routes(
+            mission_routes_path)
+        self._missions: Dict[str, Dict[str, Any]] = {}
+        self._mission_by_sn: Dict[str, str] = {}
 
     # ---------------------------------------------------------------- topics
     def topic(self, template: str, sn: Optional[str] = None) -> str:
@@ -349,6 +361,8 @@ class DJICloudConnector:
         data = payload_data if isinstance(payload_data, dict) else payload
         if method == METHOD_TOPO:
             self.topology = data
+        elif method == METHOD_TASK_PROGRESS:
+            self._handle_mission_progress(data)
         elif msg.topic.endswith("/osd"):
             self.parse_osd(data)
             self.handle_drc_ack(data)
@@ -484,32 +498,66 @@ class DJICloudConnector:
         return info.rc == mqtt.MQTT_ERR_SUCCESS  # type: ignore[union-attr]
 
     def flighttask_prepare(self, drone_sn: str, waypoints: List[Dict[str, Any]],
-                           flight_id: Optional[str] = None) -> bool:
+                           flight_id: Optional[str] = None,
+                           task_id: Optional[str] = None) -> bool:
         """Prepare a waypoint mission. Real deployments attach a WPML KMZ file."""
+        task_id = task_id or str(uuid.uuid4())
+        flight_id = flight_id or str(uuid.uuid4())
+        normalized = self._normalize_waypoints(waypoints)
+        now = time.time()
+        self._missions[task_id] = {
+            "task_id": task_id, "flight_id": flight_id,
+            "drone_sn": drone_sn, "waypoints": normalized,
+            "idx": 0, "state": "prepared", "progress": 0.0,
+            "message": "任务已准备，等待执行",
+            "created_at": now, "updated_at": now,
+        }
+        self._mission_by_sn[str(drone_sn)] = task_id
         return self.publish_service(METHOD_TASK_PREPARE, {
-            "flight_id": flight_id or str(uuid.uuid4()),
+            "flight_id": flight_id,
+            "task_id": task_id,
             "task_type": 0,
             "drone_sn": drone_sn,
             # Skeleton: real Cloud API expects a KMZ reference here (WPML).
-            "waypoints": [
-                {"lat": float(w["lat"]), "lng": float(w["lng"]),
-                 "alt": float(w.get("alt", 50.0))}
-                for w in waypoints
-            ],
+            "waypoints": normalized,
         })
 
+    @staticmethod
+    def _task_data(task_id: str, slot: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Include drone_sn so mock/cloud handlers can resolve the aircraft."""
+        data: Dict[str, Any] = {"task_id": task_id}
+        if slot and slot.get("drone_sn"):
+            data["drone_sn"] = slot["drone_sn"]
+        return data
+
     def flighttask_execute(self, task_id: str, flight_id: str) -> bool:
-        return self.publish_service(
-            METHOD_TASK_EXECUTE, {"task_id": task_id, "flight_id": flight_id})
+        tid, slot = self._resolve_task(task_id)
+        if tid:
+            self._set_mission_state(tid, "running", "任务执行中")
+        data = self._task_data(task_id, slot)
+        data["flight_id"] = flight_id
+        return self.publish_service(METHOD_TASK_EXECUTE, data)
 
     def flighttask_pause(self, task_id: str) -> bool:
-        return self.publish_service(METHOD_TASK_PAUSE, {"task_id": task_id})
+        tid, slot = self._resolve_task(task_id)
+        if tid:
+            self._set_mission_state(tid, "paused", "任务已暂停")
+        return self.publish_service(
+            METHOD_TASK_PAUSE, self._task_data(task_id, slot))
 
     def flighttask_resume(self, task_id: str) -> bool:
-        return self.publish_service(METHOD_TASK_RESUME, {"task_id": task_id})
+        tid, slot = self._resolve_task(task_id)
+        if tid:
+            self._set_mission_state(tid, "running", "任务已恢复")
+        return self.publish_service(
+            METHOD_TASK_RESUME, self._task_data(task_id, slot))
 
     def flighttask_cancel(self, task_id: str) -> bool:
-        return self.publish_service(METHOD_TASK_CANCEL, {"task_id": task_id})
+        tid, slot = self._resolve_task(task_id)
+        if tid:
+            self._set_mission_state(tid, "cancelled", "任务已取消")
+        return self.publish_service(
+            METHOD_TASK_CANCEL, self._task_data(task_id, slot))
 
     def start_live(self, drone_sn: str, rtmp_url: str,
                    video_id: Optional[str] = None) -> bool:
@@ -573,6 +621,204 @@ class DJICloudConnector:
                 "latency_ms": None, "at": sent_at,
             }
         return ok
+
+    # ------------------------------------------------------------- mission
+    @staticmethod
+    def _load_json_config(
+        path: Optional[str], default_path: Path, label: str,
+    ) -> Dict[str, Any]:
+        """Load a standalone JSON config; tolerate missing/corrupt files."""
+        cfg_path = Path(path or default_path)
+        try:
+            with cfg_path.open("r", encoding="utf-8") as fh:
+                cfg = json.load(fh)
+            if not isinstance(cfg, dict):
+                raise ValueError(f"{label} must be a JSON object")
+            return cfg
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("%s %s unavailable: %s; using empty defaults",
+                           label, cfg_path, exc)
+            return {}
+
+    def _load_mission_routes(self, path: Optional[str] = None) -> List[Dict[str, Any]]:
+        cfg_path = Path(path or DEFAULT_MISSION_ROUTES)
+        try:
+            with cfg_path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            routes = data.get("routes") if isinstance(data, dict) else None
+            if isinstance(routes, list):
+                return [r for r in routes if isinstance(r, dict)]
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("mission routes %s unavailable: %s", cfg_path, exc)
+        return []
+
+    def _mission_cfg(self) -> Dict[str, Any]:
+        return self.mission_config.get("mission") or {}
+
+    @staticmethod
+    def _pick_field(data: Dict[str, Any], names: List[str]) -> Any:
+        for name in names:
+            if data.get(name) is not None:
+                return data[name]
+        return None
+
+    def _normalize_waypoints(
+        self, waypoints: List[Dict[str, Any]],
+    ) -> List[Dict[str, float]]:
+        cfg = self._mission_cfg()
+        default_alt = float(cfg.get("default_alt_m", 80.0))
+        limit = max(1, int(cfg.get("max_waypoints", 100) or 100))
+        out: List[Dict[str, float]] = []
+        for w in (waypoints or [])[:limit]:
+            try:
+                out.append({
+                    "lat": float(w["lat"]),
+                    "lng": float(w.get("lng", w.get("lon"))),
+                    "alt": float(w.get("alt", default_alt)),
+                })
+            except (KeyError, TypeError, ValueError):
+                logger.warning("skip invalid waypoint: %r", w)
+        return out
+
+    def mission_routes(self) -> List[Dict[str, Any]]:
+        """Preset patrol routes loaded from the standalone JSON file."""
+        return [dict(route) for route in self._mission_routes]
+
+    def _resolve_task(
+        self, task_id: Optional[str] = None, drone_sn: Optional[str] = None,
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """Resolve a task by id, latest-per-aircraft, or single active task."""
+        if task_id and task_id in self._missions:
+            return task_id, self._missions[task_id]
+        if drone_sn:
+            tid = self._mission_by_sn.get(str(drone_sn))
+            if tid and tid in self._missions:
+                return tid, self._missions[tid]
+        if len(self._missions) == 1:
+            tid = next(iter(self._missions))
+            return tid, self._missions[tid]
+        return None, None
+
+    def _set_mission_state(
+        self, task_id: str, state: str, message: str = "",
+        progress: Optional[float] = None,
+    ) -> None:
+        slot = self._missions.get(task_id)
+        if slot is None:
+            return
+        slot["state"] = state
+        if progress is not None:
+            slot["progress"] = max(0.0, min(100.0, float(progress)))
+        if message:
+            slot["message"] = message
+        slot["updated_at"] = time.time()
+
+    def create_mission(
+        self, drone_sn: str, waypoints: List[Dict[str, Any]],
+        flight_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Prepare a mission and return its task_id (None if not dispatched)."""
+        normalized = self._normalize_waypoints(waypoints)
+        if not normalized:
+            return None
+        task_id = str(uuid.uuid4())
+        ok = self.flighttask_prepare(
+            drone_sn, normalized, flight_id=flight_id, task_id=task_id)
+        if not ok and self.mode != "mock":
+            return None
+        return task_id
+
+    def mission_status(
+        self, drone_sn: Optional[str] = None, task_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        items: List[Dict[str, Any]] = []
+        for slot in self._missions.values():
+            if drone_sn and slot.get("drone_sn") != drone_sn:
+                continue
+            if task_id and slot.get("task_id") != task_id:
+                continue
+            items.append(dict(slot))
+        items.sort(key=lambda m: m.get("created_at", 0.0), reverse=True)
+        return {
+            "missions": items,
+            "routes": self.mission_routes(),
+            "config": self.mission_config,
+        }
+
+    def _parse_mission_progress(
+        self, data: Dict[str, Any],
+    ) -> Tuple[str, float, str]:
+        """Map a device flighttask_progress payload to state/progress/message."""
+        cfg = self._mission_cfg()
+        result = self._pick_field(data, cfg.get("result_fields") or [])
+        state_raw = self._pick_field(data, cfg.get("state_fields") or [])
+        progress_raw = self._pick_field(data, cfg.get("progress_fields") or [])
+        message = str(self._pick_field(
+            data, cfg.get("message_fields") or []) or "")
+        try:
+            progress = float(progress_raw) if progress_raw is not None else 0.0
+        except (TypeError, ValueError):
+            progress = 0.0
+        if 0 < progress <= 1.0:
+            progress *= 100.0
+        progress = max(0.0, min(100.0, progress))
+
+        if result not in (None, 0, "0", "success", "ok", "OK"):
+            return "failed", progress, message or f"device result={result}"
+
+        state_map = cfg.get("state_map") or {}
+        numeric = cfg.get("numeric_state_map") or {}
+        if isinstance(state_raw, str):
+            state = state_map.get(state_raw.lower(), state_raw.lower())
+        elif state_raw is not None:
+            try:
+                state = numeric.get(str(int(state_raw)), "running")
+            except (TypeError, ValueError):
+                state = "running"
+        elif progress >= 100:
+            state = "success"
+        else:
+            state = "running"
+        if progress >= 100 and state not in ("failed", "cancelled"):
+            state = "success"
+        return state, progress, message
+
+    def _handle_mission_progress(self, data: Dict[str, Any]) -> None:
+        """Route a device progress report into the mission state machine."""
+        if not isinstance(data, dict):
+            return
+        cfg = self._mission_cfg()
+        task_raw = self._pick_field(data, cfg.get("task_id_fields") or [])
+        sn_raw = data.get("drone_sn") or data.get("sn")
+        tid, _ = self._resolve_task(
+            str(task_raw) if task_raw else None,
+            str(sn_raw) if sn_raw else None,
+        )
+        if tid is None:
+            return
+        state, progress, message = self._parse_mission_progress(data)
+        self._set_mission_state(tid, state, message, progress)
+        logger.info("DJI mission progress: task=%s state=%s progress=%.1f%%",
+                    tid, state, progress)
+
+    def _advance_mock_missions(self) -> None:
+        """Advance one waypoint per tick for FLYING mock missions."""
+        for sn, mock in list(self._mock_mission.items()):
+            if self._mock_state.get(sn) != "FLYING":
+                continue
+            tid, slot = self._resolve_task(drone_sn=sn)
+            if slot is None:
+                continue
+            total = len(slot.get("waypoints") or [])
+            if total <= 0:
+                continue
+            idx = min(total, int(mock.get("idx", 0)) + 1)
+            mock["idx"] = idx
+            slot["idx"] = idx
+            slot["progress"] = round(idx / total * 100.0, 1)
+            slot["updated_at"] = time.time()
+            if idx >= total:
+                self._set_mission_state(tid, "success", "航线执行完成", 100.0)
 
     # -------------------------------------------------------------- control
     @staticmethod
@@ -945,15 +1191,12 @@ class DJICloudConnector:
         self._mock_t += dt
         self._advance_calibration(dt)
         self._advance_drc_ack()
+        self._advance_mock_missions()
         frames = []
         for i in range(self.mock_drones):
             osd = self._mock_osd(i)
             frames.append(osd)
             self.parse_osd(osd)
-            m = self._mock_mission.get(osd["sn"])
-            if m and self._mock_state.get(osd["sn"]) == "FLYING":
-                if m["idx"] < len(m["waypoints"]):
-                    m["idx"] += 1
         return frames
 
     # ----------------------------------------------------------- run/publish

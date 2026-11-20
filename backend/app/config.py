@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     dji_rc_calibration_file: str = ""
     # Empty = use backend/config/dji_control.json
     dji_control_config: str = ""
+    # Empty = use backend/config/dji_mission.json / dji_mission_routes.json
+    dji_mission_config: str = ""
+    dji_mission_routes: str = ""
 
     # --- MediaMTX (video streaming) --------------------------------------
     mediamtx_api_url: str = "http://mediamtx:9997"

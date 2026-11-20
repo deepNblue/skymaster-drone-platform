@@ -49,6 +49,17 @@ class ActionBody(BaseModel):
     waypoints: Optional[List[Dict[str, float]]] = None
 
 
+class MissionPrepareBody(BaseModel):
+    drone_sn: str
+    route_id: Optional[str] = None
+    waypoints: Optional[List[Dict[str, float]]] = None
+
+
+class MissionControlBody(BaseModel):
+    task_id: str
+    action: str = Field(..., description="execute | pause | resume | cancel")
+
+
 class RCAxisBody(BaseModel):
     min: float = Field(..., ge=-1.0, le=1.0)
     center: float = Field(..., ge=-1.0, le=1.0)
@@ -138,9 +149,8 @@ async def send_action(
     elif action == "mission":
         if not body.waypoints:
             raise HTTPException(status_code=422, detail="waypoints required for mission")
-        ok = conn.flighttask_prepare(body.drone_sn, body.waypoints)
-        if ok:
-            conn.flighttask_execute("api-task", "api-flight")
+        task_id = conn.create_mission(body.drone_sn, body.waypoints)
+        ok = bool(task_id) and conn.flighttask_execute(task_id, "api-flight")
     else:
         raise HTTPException(status_code=422, detail=f"unknown action: {action}")
     if not ok:
@@ -218,3 +228,83 @@ async def calibration_rc(
         "deadzone": conn._rc_calibration[body.drone_sn]["deadzone"],
         "axes": axes,
     }
+
+
+@router.get("/mission/routes")
+async def mission_routes(
+    request: Request,
+    user: User = Depends(get_current_user_optional),
+) -> Dict[str, Any]:
+    """Preset patrol routes loaded from dji_mission_routes.json."""
+    conn = _connector(request)
+    return {"routes": conn.mission_routes()}
+
+
+@router.get("/mission/status")
+async def mission_status(
+    request: Request,
+    drone_sn: Optional[str] = None,
+    task_id: Optional[str] = None,
+    user: User = Depends(get_current_user_optional),
+) -> Dict[str, Any]:
+    """Task state machines, preset routes and mission config."""
+    conn = _connector(request)
+    return conn.mission_status(drone_sn, task_id)
+
+
+@router.post("/mission/prepare")
+async def mission_prepare(
+    body: MissionPrepareBody,
+    request: Request,
+    user: User = Depends(get_current_user_optional),
+) -> Dict[str, Any]:
+    """Prepare a waypoint mission from a preset route or explicit waypoints."""
+    conn = _connector(request)
+    waypoints = body.waypoints
+    if body.route_id:
+        route = next(
+            (r for r in conn.mission_routes() if r.get("id") == body.route_id),
+            None,
+        )
+        if route is None:
+            raise HTTPException(status_code=404, detail=f"unknown route: {body.route_id}")
+        waypoints = route.get("waypoints") or []
+    if not waypoints:
+        raise HTTPException(status_code=422, detail="route_id or waypoints required")
+    task_id = conn.create_mission(body.drone_sn, waypoints)
+    if task_id is None:
+        raise HTTPException(status_code=503, detail="mission not dispatched")
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "drone_sn": body.drone_sn,
+        "waypoint_count": len(waypoints),
+    }
+
+
+@router.post("/mission/control")
+async def mission_control(
+    body: MissionControlBody,
+    request: Request,
+    user: User = Depends(get_current_user_optional),
+) -> Dict[str, Any]:
+    """Execute / pause / resume / cancel a prepared mission."""
+    conn = _connector(request)
+    action = body.action.lower()
+    flight_id = "api-flight"
+    if action == "execute":
+        slots = conn.mission_status(task_id=body.task_id).get("missions") or []
+        if slots:
+            flight_id = slots[0].get("flight_id") or flight_id
+        ok = conn.flighttask_execute(body.task_id, flight_id)
+    elif action == "pause":
+        ok = conn.flighttask_pause(body.task_id)
+    elif action == "resume":
+        ok = conn.flighttask_resume(body.task_id)
+    elif action == "cancel":
+        ok = conn.flighttask_cancel(body.task_id)
+    else:
+        raise HTTPException(status_code=422, detail=f"unknown mission action: {body.action}")
+    if not ok:
+        raise HTTPException(status_code=503, detail="mission command not sent")
+    return {"ok": True, "action": action, "task_id": body.task_id}
