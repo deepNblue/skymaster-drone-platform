@@ -68,9 +68,14 @@ def _spawn_one(i: int, base_port: int, args: argparse.Namespace) -> subprocess.P
         "--alt", str(args.alt),
         "--interval-ms", str(args.interval_ms),
     ]
+    # Command HTTP server: base + i (sysid-1) => sysid 1->15001, 2->15002, ...
+    # Skip when base <= 0 so swarm stays usable for telemetry-only runs.
+    command_base = getattr(args, "command_http_base", 0)
+    if command_base > 0:
+        cmd += ["--command-http", str(command_base + i)]
     logger.info(
-        "spawn drone sysid=%d region=%s endpoint=udpout:%s:%d",
-        sysid, region.name, args.host, port,
+        "spawn drone sysid=%d region=%s endpoint=udpout:%s:%d cmd_http=%d",
+        sysid, region.name, args.host, port, (command_base + i) if command_base > 0 else 0,
     )
     # Preserve stdio so operators see per-drone logs; use its own process
     # group so SIGINT to us doesn't reach the child twice on some shells.
@@ -102,6 +107,11 @@ def main() -> int:
     parser.add_argument("--pattern", default="circle")
     parser.add_argument("--alt", type=float, default=100.0)
     parser.add_argument("--interval-ms", type=int, default=100)
+    parser.add_argument(
+        "--command-http-base", type=int, default=0,
+        help="Base command HTTP port (0=disabled). sysid N listens at base+N-1, "
+             "matching SIM_DRONES registry (e.g. 15001 -> 15001,15002,15003).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
