@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1 import admin, aaas, airspace_calendar, annotation_search, approval_templates, approval_city, approvals, audit_export, auth, auth_2fa, auth_events, auth_reset, auth_sessions, auth_sso, ciio, community, community_bookmarks, community_follows, community_likes, community_notifications, community_playbooks, compliance, copilot, copilot_approval_policy, copilot_feedback, copilot_memory, copilot_prompt_templates, copilot_task_chain, copilot_tool_policy, copilot_usage, copilot_workflow_marketplace, copilot_workflows, crypto_sm2, detection_alerts, drones, external_approval, frame_diff, geofence, health, marketplace_monetization, missions, model_marketplace as mm_router, officers, preflight, remoteid, scene_annotation, scene_frame, scene_job, scene_marketplace, scene_moderation, scenes, scenes_artifacts, scenes_import, scenes_upload, sim, streams, trajectory, taas, taas_node, uom, video_streams, vision_analytics, vision_copilot as vc_router, websocket
+from app.api.v1 import admin, aaas, airspace_calendar, annotation_search, approval_templates, approval_city, approvals, audit_export, auth, auth_2fa, auth_events, auth_reset, auth_sessions, auth_sso, ciio, community, community_bookmarks, community_follows, community_likes, community_notifications, community_playbooks, compliance, copilot, copilot_approval_policy, copilot_feedback, copilot_memory, copilot_prompt_templates, copilot_task_chain, copilot_tool_policy, copilot_usage, copilot_workflow_marketplace, copilot_workflows, crypto_sm2, detection_alerts, dji, drones, external_approval, frame_diff, geofence, health, marketplace_monetization, missions, model_marketplace as mm_router, officers, preflight, remoteid, scene_annotation, scene_frame, scene_job, scene_marketplace, scene_moderation, scenes, scenes_artifacts, scenes_import, scenes_upload, sim, streams, trajectory, taas, taas_node, uom, video_streams, vision_analytics, vision_copilot as vc_router, websocket
 from app.services.metrics import router as metrics_router
 
 api_router = APIRouter()
@@ -61,6 +61,7 @@ api_router.include_router(taas_node.router)
 api_router.include_router(approval_city.router)
 api_router.include_router(external_approval.router)
 api_router.include_router(sim.router)
+api_router.include_router(dji.router)
 api_router.include_router(trajectory.router)
 api_router.include_router(uom.router)
 api_router.include_router(preflight.router)
