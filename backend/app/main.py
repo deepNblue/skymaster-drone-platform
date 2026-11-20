@@ -104,6 +104,49 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     logger.exception("MAVLink connector %s failed", _ep)
                     continue
                 _connectors.append(_conn)
+        # DJI Cloud API connector (mock by default) — mirrors MAVLink slot:
+        # DJI drones declare protocol="dji" and metadata.dji_device_sn; map
+        # that SN -> Drone UUID so telemetry lands in the same Redis streams
+        # the consumer / WS endpoints already understand (no frontend change).
+        _dji_mode = getattr(settings, "dji_mode", "mock")
+        if _dji_mode in ("mock", "cloud"):
+            from app.services.dji_cloud_connector import DJICloudConnector
+            _dji_map: dict[str, str] = {}
+            _dji_gateway = getattr(settings, "dji_gateway_sn", "MOCKDOCK001")
+            for _d in _rows:
+                if getattr(_d, "protocol", "") != "dji":
+                    continue
+                _dm = getattr(_d, "meta", None) or {}
+                _dev_sn = _dm.get("dji_device_sn")
+                if not _dev_sn:
+                    continue
+                _dji_gateway = _dm.get("dji_gateway_sn") or _dji_gateway
+                _dji_map[_dev_sn] = str(_d.id)
+            if _dji_map:
+                _dji = DJICloudConnector(
+                    gateway_sn=_dji_gateway,
+                    mode=_dji_mode,
+                    broker_host=getattr(settings, "dji_broker_host", "127.0.0.1"),
+                    broker_port=getattr(settings, "dji_broker_port", 1883),
+                    client_id=getattr(settings, "dji_client_id", "") or None,
+                    username=getattr(settings, "dji_username", "") or None,
+                    password=getattr(settings, "dji_password", "") or None,
+                    redis_client=_rc,
+                    drone_id_map=_dji_map,
+                    mock_start_lat=getattr(settings, "dji_mock_start_lat", 22.8167),
+                    mock_start_lng=getattr(settings, "dji_mock_start_lng", 108.3167),
+                    mock_drones=len(_dji_map),
+                )
+                try:
+                    _dji.connect()
+                    app.state.dji_connector = _dji
+                    _connectors.append(_dji)
+                    logger.info(
+                        "DJI connector started: mode=%s gateway=%s drones=%d",
+                        _dji_mode, _dji_gateway, len(_dji_map))
+                except Exception:  # noqa: BLE001
+                    logger.exception("DJI connector failed to start")
+
         if _connectors:
             _tasks = [_aio.create_task(_c.run()) for _c in _connectors]
             _tasks.append(_aio.create_task(_consumer.run()))

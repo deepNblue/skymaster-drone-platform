@@ -7,7 +7,9 @@
 - `mode="mock"`（默认）：无需硬件/凭证/网络，仿真 1 台 M300 over 南宁，产出 DJI 格式 OSD 遥测，响应航线/直播/返航指令
 - `mode="cloud"`：真机模式，走 MQTT，需 `pip install paho-mqtt` + DJI 开发者凭证
 
-**重要边界**：这是对接层骨架，不是完整飞控。它把 DJI 物模型消息映射成 SkyMaster 的遥测槽和指令，尚未接入 `app/main.py` 的自动启动栈（当前 telemetry stack 仍只跑 MAVLink）。真机对接时按下方步骤启用。
+**重要边界**：这是对接层骨架，不是完整飞控。它把 DJI 物模型消息映射成 SkyMaster 的遥测槽和指令。
+
+**已接入启动栈**：`app/main.py` 的 `START_TELEMETRY_STACK` 分支会按 `settings.dji_mode` 创建连接器并挂进遥测栈——从数据库读 `protocol="dji"` 且 `metadata.dji_device_sn` 的无人机，自动建立 `SN → Drone UUID` 映射。因此 DJI mock 遥测与 MAVLink 仿真走同一条链路（Redis Stream → consumer → flight_logs + WS 广播 → 前端），**前端无需改动**。演示库已建一台 `DJI-M300-01`（`MOCKM300-01` / gateway `MOCKDOCK001`）。真机对接时按下方步骤切换即可。
 
 ## 协议映射（已在代码中实现）
 
@@ -19,6 +21,8 @@
 | 执行/暂停/恢复/取消 | 同上 `flighttask_execute/pause/resume/cancel` | 对应方法 |
 | 直播推流 | method=`live_start_push` (RTMP) | `start_live()` → 指向 MediaMTX |
 | 返航 | method=`return_home` | `return_home()` |
+| **DRC 实时控制** | `thing/product/{sn}/drc` method=`control` (QoS0) | `send_drc()` — 四轴摇杆 [-1,1] 打包成 `drc` 整数 |
+| 断线重连 | MQTT CONNACK / on_disconnect | 指数退避 1s→60s + 抖动，连接成功后重置 |
 | 消息封装 | `bid/tid/timestamp/method/data/need_reply` | `envelope()` |
 
 ## 测试
@@ -26,7 +30,7 @@
 ```bash
 cd backend
 .venv/bin/python -m pytest tests/test_dji_cloud_connector.py -q
-# 15 passed
+# 24 passed（含 DRC 打包/解包、指数退避、断线状态、启动栈映射）
 ```
 
 ## 真机启用步骤（硬件到位后）
@@ -55,13 +59,27 @@ cd backend
 
 4. **WPML 航线文件**：`flighttask_prepare()` 当前把 waypoint 列表放在 `data.waypoints`（骨架用）。真机需替换为符合 DJI WPML 规范的 KMZ 文件引用，见 DJI Cloud API 文档「航线管理」。
 
-5. **接入自动启动栈**：在 `app/main.py` 的 telemetry stack 初始化处，按 `settings.dji_mode` 分支创建 `DJICloudConnector` 并加入 `_connectors`/tasks（与 MavlinkConnector 并列）。
+5. **无人机记录**：真机 SN 写进 Drone 的 `metadata.dji_device_sn`，`protocol="dji"`。启动栈会自动配对，无需改代码。示例：
+   ```bash
+   curl -X POST localhost:8000/api/v1/drones -H 'Content-Type: application/json' \
+     -d '{"sn":"DJI-M30-01","protocol":"dji","metadata":{"dji_device_sn":"<真机SN>","dji_gateway_sn":"<你的机场SN>"}}'
+   ```
 
 6. **验证顺序**：拓扑上报 → OSD 遥测入库 → 下发一条准备+执行航线 → 直播推流到 MediaMTX → 返航。
 
+## DRC 实时控制用法
+
+```python
+connector.send_drc("MOCKM300-01", throttle=0.5, yaw=0.1, pitch=0.0, roll=-0.2)
+# 轴取值 [-1,1]，打包进 drc 整数，QoS0 高频下发
+# mock 模式记录在 connector.last_drc[sn]，并置 _mock_state[sn]="DRC"
+```
+
+⚠️ DRC 是真飞控指令，真机模式下 `throttle/pitch/roll` 直接驱动电机——接入真机前务必先在 DJI 模拟器或安全空域验证轴方向与量程映射。
+
 ## 已知限制
 
-- `mode="cloud"` 尚未做 MQTT TLS/clientAuth 配置、指数退避重连（协议文档建议 1s→30s + 抖动）
+- `mode="cloud"` 尚未做 MQTT TLS/clientAuth 配置（真机 8883 端口需要）
 - OSD→canonical 映射覆盖主要字段，云台/负载/告警字段待按需扩展
 - 航线是 waypoint 列表骨架，非 WPML KMZ；断点续飞 (`flighttask_progress`) 未实现
-- DRC 实时飞行控制（`thing/product/{sn}/drc/*`）未实现
+- DRC 已实现指令下发与四轴打包，但未接前端摇杆 UI（当前仅 API/代码调用）；飞控闭环（读 DRC reply + 状态回传）待真机联调

@@ -63,8 +63,10 @@ TOPIC_STATE = "thing/product/{sn}/state"
 TOPIC_EVENTS = "thing/product/{sn}/events"
 TOPIC_SERVICES = "thing/product/{sn}/services"
 TOPIC_SERVICES_REPLY = "thing/product/{sn}/services_reply"
+TOPIC_DRC = "thing/product/{sn}/drc"
 
 METHOD_TOPO = "update_topo"
+METHOD_DRC = "control"
 METHOD_TASK_PREPARE = "flighttask_prepare"
 METHOD_TASK_EXECUTE = "flighttask_execute"
 METHOD_TASK_PAUSE = "flighttask_pause"
@@ -92,6 +94,58 @@ def envelope(method: str, data: Dict[str, Any], need_reply: int = 1) -> Dict[str
         "data": data,
         "need_reply": need_reply,
     }
+
+
+# --- DRC (real-time remote control) ----------------------------------------
+# DJI Cloud API packs four stick channels into one signed 32-bit integer:
+#   bits 0..12  throttle (thrust), 13..25 yaw, 26..38 pitch, 39..51 roll
+# each channel is [-10000, 10000] mapped to a 13-bit offset (+10000).  The
+# exact bit layout is workspace/firmware specific; keep the packing isolated
+# here so it can be swapped without touching command routing.
+DRC_CHANNEL_RANGE = 10000
+DRC_CHANNEL_BITS = 16  # 0..20000 fits in 16 bits (must exceed 2*RANGE)
+
+
+def pack_drc(*, throttle: float = 0.0, yaw: float = 0.0,
+             pitch: float = 0.0, roll: float = 0.0) -> int:
+    """Pack four normalized stick axes [-1, 1] into DJI's DRC integer."""
+    def _chan(v: float) -> int:
+        v = max(-1.0, min(1.0, float(v)))
+        return int(round((v + 1.0) * DRC_CHANNEL_RANGE))  # 0..20000
+
+    return (
+        _chan(throttle)
+        | (_chan(yaw) << (DRC_CHANNEL_BITS * 1))
+        | (_chan(pitch) << (DRC_CHANNEL_BITS * 2))
+        | (_chan(roll) << (DRC_CHANNEL_BITS * 3))
+    )
+
+
+def unpack_drc(value: int) -> Dict[str, float]:
+    """Inverse of :func:`pack_drc` — useful for tests and mock replay."""
+    mask = (1 << DRC_CHANNEL_BITS) - 1
+
+    def _chan(shift: int) -> float:
+        raw = (int(value) >> shift) & mask
+        return round(raw / float(DRC_CHANNEL_RANGE) - 1.0, 4)
+
+    return {
+        "throttle": _chan(0),
+        "yaw": _chan(DRC_CHANNEL_BITS * 1),
+        "pitch": _chan(DRC_CHANNEL_BITS * 2),
+        "roll": _chan(DRC_CHANNEL_BITS * 3),
+    }
+
+
+def reconnect_delay(attempt: int, base_s: float = 1.0,
+                    cap_s: float = 60.0, jitter: float = 0.2) -> float:
+    """Exponential backoff with jitter: base*2^n capped at ``cap_s``."""
+    if attempt <= 0:
+        return 0.0
+    delay = min(cap_s, base_s * (2 ** (attempt - 1)))
+    # Deterministic bounded jitter (no RNG dependency) keeps tests stable.
+    jitter_amount = delay * jitter * (0.5 if attempt % 2 else -0.5)
+    return max(0.0, delay + jitter_amount)
 
 
 class DJICloudConnector:
@@ -160,6 +214,11 @@ class DJICloudConnector:
         self._connected = False
         self._stop = asyncio.Event()
         self._mock_t = 0.0
+        # reconnect state (cloud mode)
+        self._reconnect_attempt = 0
+        self._reconnect_cap_s = 60.0
+        self._reconnect_base_s = 1.0
+        self.last_drc: Dict[str, Dict[str, float]] = {}
 
     # ---------------------------------------------------------------- topics
     def topic(self, template: str, sn: Optional[str] = None) -> str:
@@ -203,6 +262,7 @@ class DJICloudConnector:
         if self.username:
             client.username_pw_set(self.username, self.password or "")
         client.on_connect = self._on_mqtt_connect
+        client.on_disconnect = self._on_mqtt_disconnect
         client.on_message = self._on_mqtt_message
         client.connect(self.broker_host, self.broker_port, keepalive=30)
         self._client = client
@@ -213,9 +273,35 @@ class DJICloudConnector:
             logger.error("DJI MQTT connect failed: CONNACK=%s", rc)
             return
         self._connected = True
-        for t in self.subscribe_topics():
-            client.subscribe(t, qos=1)
+        self._reconnect_attempt = 0  # reset backoff after a good connection
+        if client is not None:  # guard for direct callback invocation in tests
+            for t in self.subscribe_topics():
+                client.subscribe(t, qos=1)
         logger.info("DJI MQTT connected, subscribed %d topics", len(self.subscribe_topics()))
+
+    def _on_mqtt_disconnect(self, client: Any, userdata: Any, rc: int) -> None:
+        """Mark disconnected; ``run`` drives reconnection with backoff."""
+        self._connected = False
+        if rc != 0:
+            logger.warning("DJI MQTT unexpected disconnect (rc=%s)", rc)
+
+    def reconnect_once(self) -> float:
+        """Attempt a single reconnect; return the delay before the *next* try.
+
+        Kept synchronous and side-effect-scoped so it is directly testable
+        without a live broker. ``run`` awaits the returned delay.
+        """
+        self._reconnect_attempt += 1
+        delay = reconnect_delay(
+            self._reconnect_attempt, self._reconnect_base_s, self._reconnect_cap_s)
+        if self._client is None:
+            return delay
+        try:
+            self._client.reconnect()
+            logger.info("DJI MQTT reconnect attempt %d scheduled", self._reconnect_attempt)
+        except Exception:  # noqa: BLE001
+            logger.warning("DJI MQTT reconnect attempt %d failed", self._reconnect_attempt)
+        return delay
 
     def _on_mqtt_message(self, client: Any, userdata: Any, msg: Any) -> None:
         try:
@@ -289,6 +375,33 @@ class DJICloudConnector:
 
     def return_home(self, drone_sn: str) -> bool:
         return self.publish_service(METHOD_RTL, {"drone_sn": drone_sn})
+
+    def send_drc(self, drone_sn: str, *, throttle: float = 0.0,
+                 yaw: float = 0.0, pitch: float = 0.0,
+                 roll: float = 0.0) -> bool:
+        """Send a real-time stick command on ``thing/product/{sn}/drc``.
+
+        Axes are normalized [-1, 1]; ``need_reply=0`` because DRC is a
+        high-frequency fire-and-forget control stream.
+        """
+        drc_value = pack_drc(throttle=throttle, yaw=yaw, pitch=pitch, roll=roll)
+        topic = self.topic(TOPIC_DRC)  # gateway (Dock) topic; drone in data
+        msg = envelope(METHOD_DRC, {
+            "drone_sn": drone_sn,
+            "drc": drc_value,
+            "control_source": "skymaster",
+        }, need_reply=0)
+        if self.mode == "mock":
+            self.last_drc[drone_sn] = unpack_drc(drc_value)
+            self._mock_state[drone_sn] = "DRC"
+            if self.on_message:
+                self.on_message(topic, msg)
+            return True
+        if not self._client or not self._connected:
+            logger.warning("send_drc: MQTT not connected")
+            return False
+        info = self._client.publish(topic, json.dumps(msg), qos=0)
+        return info.rc == mqtt.MQTT_ERR_SUCCESS  # type: ignore[union-attr]
 
     # -------------------------------------------------------------- parsing
     def parse_osd(self, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -373,7 +486,11 @@ class DJICloudConnector:
 
     # ----------------------------------------------------------- run/publish
     async def run(self, tick_s: float = 0.5) -> None:
-        """Publish loop for telemetry stack compatibility with MavlinkConnector."""
+        """Publish loop for telemetry stack compatibility with MavlinkConnector.
+
+        In cloud mode a dropped MQTT link is reconnected with exponential
+        backoff (see :meth:`reconnect_once`); mock mode just advances the sim.
+        """
         if self.mode == "cloud" and self._client is not None:
             self._client.loop_start()
         logger.info("DJI connector run loop started (mode=%s)", self.mode)
@@ -381,6 +498,10 @@ class DJICloudConnector:
             while not self._stop.is_set():
                 if self.mode == "mock":
                     self.mock_tick(tick_s)
+                elif self.mode == "cloud" and not self._connected:
+                    delay = self.reconnect_once()
+                    await asyncio.sleep(delay)
+                    continue
                 await self.publish_once()
                 await asyncio.sleep(tick_s)
         finally:

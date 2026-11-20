@@ -7,16 +7,21 @@ import pytest
 
 from app.services.dji_cloud_connector import (
     DJICloudConnector,
+    METHOD_DRC,
     METHOD_LIVE_START,
     METHOD_RTL,
     METHOD_TASK_CANCEL,
     METHOD_TASK_EXECUTE,
     METHOD_TASK_PAUSE,
     METHOD_TASK_PREPARE,
+    TOPIC_DRC,
     TOPIC_OSD,
     TOPIC_SERVICES,
     TOPIC_STATUS,
     envelope,
+    pack_drc,
+    reconnect_delay,
+    unpack_drc,
 )
 
 
@@ -190,3 +195,79 @@ async def test_publish_once_writes_redis_stream():
     assert stream == "telemetry:drone-uuid"
     assert float(payload["lat"]) > 0
     assert payload["source"] == "dji_cloud"
+
+
+# --- DRC (real-time control) ------------------------------------------------
+def test_drc_pack_unpack_roundtrip():
+    axes = {"throttle": 0.5, "yaw": -0.25, "pitch": 1.0, "roll": -1.0}
+    value = pack_drc(**axes)
+    assert isinstance(value, int) and value >= 0
+    decoded = unpack_drc(value)
+    for k, v in axes.items():
+        assert abs(decoded[k] - v) <= 0.001
+
+
+def test_drc_pack_clamps_to_range():
+    value = pack_drc(throttle=5.0, yaw=-9.0)
+    decoded = unpack_drc(value)
+    assert decoded["throttle"] == 1.0
+    assert decoded["yaw"] == -1.0
+    assert decoded["pitch"] == 0.0  # neutral stick
+
+
+def test_send_drc_mock_records_state_and_message():
+    seen = []
+    c = _mock(on_message=lambda topic, msg: seen.append((topic, msg)))
+    assert c.send_drc("MOCKM300-01", throttle=0.5, yaw=0.1)
+    topic, msg = seen[-1]
+    assert topic == "thing/product/TESTDOCK/drc"  # gateway topic
+    assert msg["method"] == METHOD_DRC
+    assert msg["need_reply"] == 0
+    assert c.last_drc["MOCKM300-01"]["throttle"] == 0.5
+    assert c._mock_state["MOCKM300-01"] == "DRC"
+
+
+def test_drc_topic_template():
+    # DRC is sent on the gateway topic; the template also allows explicit sn.
+    c = _mock()
+    assert c.topic(TOPIC_DRC) == "thing/product/TESTDOCK/drc"
+    assert c.topic(TOPIC_DRC, sn="DOCK-B") == "thing/product/DOCK-B/drc"
+
+
+# --- reconnect backoff ------------------------------------------------------
+def test_reconnect_delay_grows_and_caps():
+    assert reconnect_delay(0) == 0.0
+    d1 = reconnect_delay(1, base_s=1.0, cap_s=60.0, jitter=0)
+    d2 = reconnect_delay(2, base_s=1.0, cap_s=60.0, jitter=0)
+    d3 = reconnect_delay(3, base_s=1.0, cap_s=60.0, jitter=0)
+    assert d1 == 1.0 and d2 == 2.0 and d3 == 4.0
+    assert reconnect_delay(100, base_s=1.0, cap_s=60.0, jitter=0) == 60.0
+
+
+def test_reconnect_delay_jitter_is_bounded():
+    for attempt in range(1, 8):
+        d = reconnect_delay(attempt, base_s=1.0, cap_s=60.0, jitter=0.2)
+        nominal = min(60.0, 1.0 * 2 ** (attempt - 1))
+        assert 0.8 * nominal <= d <= 1.1 * nominal
+
+
+def test_reconnect_once_increments_attempt_and_returns_delay():
+    c = _mock()  # mock client is None; should still bump attempt + return delay
+    delay = c.reconnect_once()
+    assert c._reconnect_attempt == 1
+    assert delay > 0
+
+
+def test_on_mqtt_connect_resets_backoff():
+    c = _mock()
+    c._reconnect_attempt = 7
+    c._on_mqtt_connect(None, None, None, 0)
+    assert c._reconnect_attempt == 0
+    assert c._connected is True
+
+
+def test_on_mqtt_disconnect_marks_state():
+    c = _mock()
+    c._connected = True
+    c._on_mqtt_disconnect(None, None, 7)
+    assert c._connected is False
