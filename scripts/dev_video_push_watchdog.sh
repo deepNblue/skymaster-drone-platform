@@ -26,6 +26,18 @@ set -u
 DB="postgresql://skymaster:skymaster@127.0.0.1:5432/skymaster"
 VENV_PY="/home/duoduo/projects/skymaster-drone-platform/backend/.venv/bin/python"
 
+# ffmpeg is not a system package in this WSL distro (no root to apt-install).
+# Prefer a user-installed static binary from imageio-ffmpeg; fall back to PATH.
+FF_BIN_DIR="/home/duoduo/.local/lib/python3.12/site-packages/imageio_ffmpeg/binaries"
+if [ -d "$FF_BIN_DIR" ]; then
+  export PATH="$FF_BIN_DIR:$PATH"
+  FFMPEG_BIN="$(ls "$FF_BIN_DIR"/ffmpeg-* 2>/dev/null | head -1)"
+else
+  FFMPEG_BIN="$(command -v ffmpeg 2>/dev/null || true)"
+fi
+[ -z "$FFMPEG_BIN" ] && { echo "FATAL: ffmpeg not found"; exit 1; }
+echo "$(date +%T) ffmpeg: $FFMPEG_BIN"
+
 while true; do
   IDS=$("$VENV_PY" - "$DB" <<'EOF'
 import asyncio, sys
@@ -51,7 +63,7 @@ EOF
     else
       SRC="smptebars=size=640x360:rate=15"
     fi
-    ffmpeg -re -f lavfi -i "$SRC" \
+    "$FFMPEG_BIN" -re -f lavfi -i "$SRC" \
       -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -g 30 \
       -rtsp_transport tcp \
       -f rtsp "rtsp://127.0.0.1:8554/drone-$DUID" \

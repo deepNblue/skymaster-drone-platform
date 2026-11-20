@@ -24,6 +24,10 @@ export AUTH_OPTIONAL=true
 export START_TELEMETRY_STACK=true
 # sim 控制 API 的 sysid→命令端口注册表（必须覆盖全部仿真机）
 export SIM_DRONES="1:15001,2:15002,3:15003"
+# 视频栈跑在裸进程(非 docker)，mediamtx 用 127.0.0.1 而非容器主机名
+export MEDIAMTX_API_URL="http://127.0.0.1:9997"
+export MEDIAMTX_HLS_URL_BASE="http://127.0.0.1:8888"
+export MEDIAMTX_RTSP_URL_BASE="rtsp://127.0.0.1:8554"
 
 # 2) 后端 FastAPI (:8000)
 if ! port_up 8000; then
