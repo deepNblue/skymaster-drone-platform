@@ -83,6 +83,8 @@ async def dji_status(
         "connected": getattr(conn, "_connected", False),
         "aircraft": known,
         "last_drc": getattr(conn, "last_drc", {}),
+        "drc_link": (conn.drc_link_status()
+                     if hasattr(conn, "drc_link_status") else {}),
         "states": getattr(conn, "_mock_state", {}),
         "reconnect_attempt": getattr(conn, "_reconnect_attempt", 0),
     }

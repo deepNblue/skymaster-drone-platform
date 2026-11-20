@@ -84,6 +84,7 @@ RC_CALIBRATION_ITEM = "rc"
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CALIBRATION_CONFIG = _BACKEND_ROOT / "config" / "dji_calibration.json"
 DEFAULT_RC_CALIBRATION_FILE = _BACKEND_ROOT / "data" / "dji_rc_calibration.json"
+DEFAULT_CONTROL_CONFIG = _BACKEND_ROOT / "config" / "dji_control.json"
 
 # Canonical telemetry keys shared with MavlinkConnector._slot().
 _TELEMETRY_KEYS = (
@@ -196,6 +197,7 @@ class DJICloudConnector:
         mock_drones: int = 1,
         calibration_config_path: Optional[str] = None,
         rc_calibration_path: Optional[str] = None,
+        control_config_path: Optional[str] = None,
     ) -> None:
         if mode not in ("mock", "cloud"):
             raise ValueError(f"invalid DJI connector mode: {mode!r}")
@@ -239,6 +241,15 @@ class DJICloudConnector:
             rc_calibration_path or DEFAULT_RC_CALIBRATION_FILE)
         self._calibration: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self._rc_calibration: Dict[str, Dict[str, Any]] = self._load_rc_calibration()
+
+        # --- DRC command/ack loop (config-driven) -------------------------
+        self.control_config: Dict[str, Any] = self._load_control_config(
+            control_config_path)
+        self._drc_seq = 0
+        self._drc_pending: Dict[str, Dict[str, Any]] = {}
+        self.last_drc_ack: Dict[str, Dict[str, Any]] = {}
+        self._mock_state: Dict[str, str] = {}
+        self._mock_mission: Dict[str, Dict[str, Any]] = {}
 
     # ---------------------------------------------------------------- topics
     def topic(self, template: str, sn: Optional[str] = None) -> str:
@@ -332,11 +343,17 @@ class DJICloudConnector:
         if self.on_message:
             self.on_message(msg.topic, payload)
         method = payload.get("method", "")
-        data = payload.get("data") or {}
+        payload_data = payload.get("data")
+        # OSD/state messages carry fields at the root; services messages
+        # wrap them in ``data``. Accept both shapes.
+        data = payload_data if isinstance(payload_data, dict) else payload
         if method == METHOD_TOPO:
             self.topology = data
         elif msg.topic.endswith("/osd"):
             self.parse_osd(data)
+            self.handle_drc_ack(data)
+        elif msg.topic.endswith("/state") or msg.topic.endswith("/events"):
+            self.handle_drc_ack(data)
         elif msg.topic.endswith("/services_reply"):
             self._handle_services_reply(payload, topic=msg.topic)
 
@@ -515,16 +532,29 @@ class DJICloudConnector:
         Axes are normalized [-1, 1]; ``need_reply=0`` because DRC is a
         high-frequency fire-and-forget control stream.
         """
-        drc_value = pack_drc(throttle=throttle, yaw=yaw, pitch=pitch, roll=roll)
+        cfg = self._drc_cfg()
+        wrap = max(1, int(cfg.get("seq_wrap", 65536) or 65536))
+        self._drc_seq = (self._drc_seq + 1) % wrap
+        seq = self._drc_seq
+        axes = {
+            "throttle": throttle, "yaw": yaw,
+            "pitch": pitch, "roll": roll,
+        }
+        drc_value = pack_drc(**axes)
         topic = self.topic(TOPIC_DRC)  # gateway (Dock) topic; drone in data
         msg = envelope(METHOD_DRC, {
             "drone_sn": drone_sn,
             "drc": drc_value,
+            "drc_seq": seq,
             "control_source": "skymaster",
         }, need_reply=0)
+        sent_at = time.time()
         if self.mode == "mock":
             self.last_drc[drone_sn] = unpack_drc(drc_value)
             self._mock_state[drone_sn] = "DRC"
+            self._drc_pending[drone_sn] = {
+                "seq": seq, "axes": axes, "sent_at": sent_at,
+            }
             if self.on_message:
                 self.on_message(topic, msg)
             return True
@@ -532,7 +562,144 @@ class DJICloudConnector:
             logger.warning("send_drc: MQTT not connected")
             return False
         info = self._client.publish(topic, json.dumps(msg), qos=0)
-        return info.rc == mqtt.MQTT_ERR_SUCCESS  # type: ignore[union-attr]
+        ok = info.rc == mqtt.MQTT_ERR_SUCCESS  # type: ignore[union-attr]
+        if ok:
+            self._drc_pending[drone_sn] = {
+                "seq": seq, "axes": axes, "sent_at": sent_at,
+            }
+        else:
+            self.last_drc_ack[drone_sn] = {
+                "seq": seq, "axes": axes, "state": "send_failed",
+                "latency_ms": None, "at": sent_at,
+            }
+        return ok
+
+    # -------------------------------------------------------------- control
+    @staticmethod
+    def _load_control_config(path: Optional[str] = None) -> Dict[str, Any]:
+        """Load DRC ack timing / reply field names from the standalone JSON."""
+        cfg_path = Path(path or DEFAULT_CONTROL_CONFIG)
+        try:
+            with cfg_path.open("r", encoding="utf-8") as fh:
+                cfg = json.load(fh)
+            if not isinstance(cfg, dict):
+                raise ValueError("control config must be a JSON object")
+            return cfg
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "control config %s unavailable: %s; using empty defaults",
+                cfg_path, exc)
+            return {"drc": {}}
+
+    def _drc_cfg(self) -> Dict[str, Any]:
+        return self.control_config.get("drc") or {}
+
+    def handle_drc_ack(self, data: Dict[str, Any]) -> bool:
+        """Record a device ack for the most recent DRC command.
+
+        Firmware variants name the sequence field differently; the accepted
+        names come from ``config/dji_control.json``.
+        """
+        if not isinstance(data, dict):
+            return False
+        nested = data.get("data")
+        candidates = [data]
+        if isinstance(nested, dict):
+            candidates.append(nested)
+
+        seq = None
+        for field in self._drc_cfg().get("ack_fields") or []:
+            for src in candidates:
+                if src.get(field) is not None:
+                    try:
+                        seq = int(src[field])
+                    except (TypeError, ValueError):
+                        continue
+                    break
+            if seq is not None:
+                break
+        if seq is None:
+            return False
+
+        sn = data.get("sn") or data.get("drone_sn")
+        if not sn and isinstance(nested, dict):
+            sn = nested.get("sn") or nested.get("drone_sn")
+        sn = str(sn or "")
+        if not sn:
+            for key, pending in self._drc_pending.items():
+                if pending.get("seq") == seq:
+                    sn = key
+                    break
+        if not sn:
+            return False
+        pending = self._drc_pending.get(sn)
+        if pending is None:
+            return False
+        if int(pending.get("seq", -1)) != seq:
+            logger.debug("stale DRC ack for %s: seq=%s expected=%s",
+                         sn, seq, pending.get("seq"))
+            return False
+
+        now = time.time()
+        self.last_drc_ack[sn] = {
+            "seq": seq,
+            "axes": dict(pending["axes"]),
+            "state": "acked",
+            "latency_ms": round((now - float(pending["sent_at"])) * 1000.0, 1),
+            "at": now,
+        }
+        self._drc_pending.pop(sn, None)
+        return True
+
+    def _advance_drc_ack(self) -> None:
+        """Mock device ack after the configured delay."""
+        raw_delay = self._drc_cfg().get("ack_delay_ms")
+        delay_s = float(120 if raw_delay is None else raw_delay) / 1000.0
+        now = time.time()
+        for sn, pending in list(self._drc_pending.items()):
+            if now - float(pending["sent_at"]) >= delay_s:
+                self.handle_drc_ack({
+                    "sn": sn,
+                    "drc_ack_seq": pending["seq"],
+                    "control_ack": 0,
+                })
+
+    def _expire_drc_pending(self) -> None:
+        """Mark unacknowledged cloud-mode commands as timed out."""
+        raw_timeout = self._drc_cfg().get("ack_timeout_ms")
+        timeout_s = float(3000 if raw_timeout is None else raw_timeout) / 1000.0
+        now = time.time()
+        for sn, pending in list(self._drc_pending.items()):
+            if now - float(pending["sent_at"]) > timeout_s:
+                self.last_drc_ack[sn] = {
+                    "seq": pending["seq"],
+                    "axes": dict(pending["axes"]),
+                    "state": "timeout",
+                    "latency_ms": None,
+                    "at": now,
+                }
+                self._drc_pending.pop(sn, None)
+                logger.warning("DRC ack timeout for %s seq=%s",
+                               sn, pending["seq"])
+
+    def drc_link_status(self) -> Dict[str, Any]:
+        """Command / ack link status for the joystick panel."""
+        raw_timeout = self._drc_cfg().get("ack_timeout_ms")
+        timeout_ms = float(3000 if raw_timeout is None else raw_timeout)
+        now = time.time()
+        pending = {}
+        for sn, p in self._drc_pending.items():
+            age_ms = round((now - float(p["sent_at"])) * 1000.0, 1)
+            pending[sn] = {
+                "seq": p["seq"], "axes": p["axes"],
+                "age_ms": age_ms, "timed_out": age_ms > timeout_ms,
+            }
+        return {
+            "seq": self._drc_seq,
+            "last_ack": self.last_drc_ack,
+            "pending": pending,
+            "ack_timeout_ms": timeout_ms,
+        }
 
     # ---------------------------------------------------------- calibration
     @staticmethod
@@ -750,9 +917,6 @@ class DJICloudConnector:
             "flight_status": self._mock_state.get(sn, "HOVER"),
         }
 
-    _mock_state: Dict[str, str] = {}
-    _mock_mission: Dict[str, Dict[str, Any]] = {}
-
     def _handle_mock_service(self, method: str, data: Dict[str, Any]) -> None:
         sn = data.get("drone_sn", "MOCKM300-01")
         if method == METHOD_TASK_PREPARE:
@@ -780,6 +944,7 @@ class DJICloudConnector:
         """Advance mock simulation by ``dt`` seconds; return OSD payloads."""
         self._mock_t += dt
         self._advance_calibration(dt)
+        self._advance_drc_ack()
         frames = []
         for i in range(self.mock_drones):
             osd = self._mock_osd(i)
@@ -809,6 +974,7 @@ class DJICloudConnector:
                     delay = self.reconnect_once()
                     await asyncio.sleep(delay)
                     continue
+                self._expire_drc_pending()
                 await self.publish_once()
                 await asyncio.sleep(tick_s)
         finally:

@@ -26,6 +26,19 @@ const RED = '#ff4d4f';
 type Axes = { throttle: number; yaw: number; pitch: number; roll: number };
 const NEUTRAL: Axes = { throttle: 0, yaw: 0, pitch: 0, roll: 0 };
 
+type DrcAck = {
+  seq: number;
+  axes: Axes;
+  state: string;
+  latency_ms: number | null;
+  at: number;
+};
+type DrcPending = {
+  seq: number;
+  axes: Axes;
+  age_ms: number;
+  timed_out: boolean;
+};
 type DjiStatus = {
   available: boolean;
   mode: string;
@@ -33,6 +46,12 @@ type DjiStatus = {
   connected: boolean;
   aircraft: string[];
   last_drc: Record<string, Axes>;
+  drc_link?: {
+    seq: number;
+    last_ack: Record<string, DrcAck>;
+    pending: Record<string, DrcPending>;
+    ack_timeout_ms: number;
+  };
   states: Record<string, string>;
   reconnect_attempt: number;
 };
@@ -136,11 +155,17 @@ export default function DjiControlPage() {
     }
   }, [selected]);
 
+  // 有待确认指令时加快轮询，让回执状态及时刷新
+  const hasPending = !!(
+    status?.drc_link?.pending && Object.keys(status.drc_link.pending).length
+  );
+
+  useEffect(() => { fetchStatus(); }, [fetchStatus]);
+
   useEffect(() => {
-    fetchStatus();
-    const t = setInterval(fetchStatus, 4000);
+    const t = setInterval(fetchStatus, hasPending ? 500 : 4000);
     return () => clearInterval(t);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fetchStatus, hasPending]);
 
   // 当前四轴：左杆 = 油门(throttle)/偏航(yaw)，右杆 = 俯仰(pitch)/横滚(roll)
   // 用 ref 保存最新值，避免高频发送闭包读到旧值
@@ -200,6 +225,8 @@ export default function DjiControlPage() {
   };
 
   const lastDrc = selected && status?.last_drc?.[selected] ? status.last_drc[selected] : null;
+  const drcAck = selected ? status?.drc_link?.last_ack?.[selected] || null : null;
+  const drcPending = selected ? status?.drc_link?.pending?.[selected] || null : null;
   const aircraft = status?.aircraft || [];
 
   return (
@@ -294,6 +321,31 @@ export default function DjiControlPage() {
                   PIT {lastDrc.pitch?.toFixed(2)} / ROL {lastDrc.roll?.toFixed(2)}
                 </div>
               )}
+              <div style={{
+                marginTop: 12, paddingTop: 12, borderTop: `1px solid ${PANEL_BORDER}`,
+                display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+              }}>
+                <span style={{ color: '#9fb3d1', fontSize: 12 }}>指令回执</span>
+                {drcPending ? (
+                  <Tag color={drcPending.timed_out ? 'red' : 'processing'}>
+                    等待回执 · seq {drcPending.seq} · {drcPending.age_ms.toFixed(0)}ms
+                  </Tag>
+                ) : drcAck ? (
+                  <>
+                    <Tag color={drcAck.state === 'acked' ? 'green' : 'red'}>
+                      {drcAck.state === 'acked' ? '已回执' : drcAck.state === 'timeout' ? '回执超时' : '发送失败'}
+                      {` · seq ${drcAck.seq}`}
+                      {drcAck.latency_ms != null && ` · ${drcAck.latency_ms.toFixed(0)}ms`}
+                    </Tag>
+                    <span style={{ color: '#5f759a', fontSize: 11, fontFamily: 'monospace' }}>
+                      执行轴 THR {drcAck.axes?.throttle?.toFixed(2)} / YAW {drcAck.axes?.yaw?.toFixed(2)} /
+                      PIT {drcAck.axes?.pitch?.toFixed(2)} / ROL {drcAck.axes?.roll?.toFixed(2)}
+                    </span>
+                  </>
+                ) : (
+                  <Tag>暂无回执</Tag>
+                )}
+              </div>
             </div>
 
             <div style={{ background: PANEL_BG, border: `1px solid ${PANEL_BORDER}`, borderRadius: 12, padding: 20 }}>

@@ -29,10 +29,10 @@
 
 ```bash
 cd backend
-.venv/bin/python -m pytest tests/test_dji_cloud_connector.py tests/test_dji_calibration.py \
-  tests/test_dji_calibration_reply.py tests/test_dji_api.py \
-  tests/test_dji_calibration_api.py -q
-# 55 passed（含 DRC 打包/解包、指数退避、校准状态机、reply 路由、RC 死区映射、API 边界校验）
+.venv/bin/python -m pytest tests/test_dji_drc_ack.py tests/test_dji_cloud_connector.py \
+  tests/test_dji_calibration.py tests/test_dji_calibration_reply.py \
+  tests/test_dji_api.py tests/test_dji_calibration_api.py -q
+# 65 passed（含 DRC 打包/回执、指数退避、校准状态机、reply 路由、RC 死区映射、API 边界校验）
 ```
 
 ## 真机启用步骤（硬件到位后）
@@ -71,11 +71,11 @@ cd backend
 
 ## DRC 实时控制用法
 
-**前端摇杆面板**（`/dashboard/dji-control`，导航"DJI 摇杆"）：双虚拟摇杆——左杆油门/偏航、右杆俯仰/横滚，拖动时每 100ms 下发一次 DRC，松手自动回中；带四轴实时值、后端回显、返航/悬停/直播快捷指令和安全警告。对应后端 API：
+**前端摇杆面板**（`/dashboard/dji-control`，导航"DJI 摇杆"）：双虚拟摇杆——左杆油门/偏航、右杆俯仰/横滚，拖动时每 100ms 下发一次 DRC，松手自动回中；带四轴实时值、后端回显、**指令回执状态**、返航/悬停/直播快捷指令和安全警告。对应后端 API：
 
 | 端点 | 说明 |
 |---|---|
-| `GET /api/v1/dji/status` | 连接器状态 / 飞机列表 / 各机 last_drc / 状态 / 重连次数 |
+| `GET /api/v1/dji/status` | 连接器状态 / 飞机列表 / last_drc / **drc_link（指令回执）** / 状态 / 重连次数 |
 | `POST /api/v1/dji/drc` | `{drone_sn, throttle, yaw, pitch, roll}` 四轴 [-1,1] |
 | `POST /api/v1/dji/action` | `{action: return_home\|hover\|live_start\|mission, drone_sn, ...}` |
 
@@ -87,7 +87,9 @@ connector.send_drc("MOCKM300-01", throttle=0.5, yaw=0.1, pitch=0.0, roll=-0.2)
 # mock 模式记录在 connector.last_drc[sn]，并置 _mock_state[sn]="DRC"
 ```
 
-⚠️ DRC 是真飞控指令，真机模式下 `throttle/pitch/roll` 直接驱动电机——接入真机前务必先在 DJI 模拟器或安全空域验证轴方向与量程映射。
+**DRC 回执闭环**：参数在独立文件 `backend/config/dji_control.json`（回执延迟、超时、序列号回绕、应答字段名）。`send_drc()` 为每条指令分配递增 `drc_seq` 并记录 pending；设备在上报 OSD / state / events 时回传序列号，`handle_drc_ack()` 匹配后写入 `last_drc_ack`（含执行轴回显与往返延迟），mock 模式按配置延迟自动回执，cloud 模式超时标记 `timeout`。高频指令只保留最后一次 pending——回执确认的是最新指令。
+
+⚠️ DRC 是真飞控指令，真机模式下 `throttle/pitch/roll` 直接驱动电机——接入真机前务必先在 DJI 模拟器或安全空域验证轴方向与量程映射。回执字段名与固件相关，真机联调时按实际回包核对 `ack_fields`。
 
 ## 校准中心（`/dashboard/calibration`，导航「校准中心」）
 
@@ -135,5 +137,5 @@ connector.apply_rc_axis("MOCKM300-01", "throttle", 0.5)
 - `mode="cloud"` 尚未做 MQTT TLS/clientAuth 配置（真机 8883 端口需要）
 - OSD→canonical 映射覆盖主要字段，云台/负载/告警字段待按需扩展
 - 航线是 waypoint 列表骨架，非 WPML KMZ；断点续飞 (`flighttask_progress`) 未实现
-- DRC 已实现指令下发、四轴打包与前端摇杆面板；飞控闭环（读 DRC reply + 状态回传）待真机联调
+- DRC 已实现指令下发、四轴打包、序列号回执闭环（含延迟/超时状态）与前端摇杆面板；真机回包字段与延迟阈值需按固件联调核对
 - 校准项通过 `thing/product/{sn}/services` 的 `calibration` 方法下发；真机方法名/参数需按固件物模型核对。`services_reply` → `update_calibration()` 已自动绑定，但状态枚举按 DJI 常见约定映射，真机联调时需按实际固件回包字段核对

@@ -140,6 +140,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                         settings, "dji_calibration_config", "") or None,
                     rc_calibration_path=getattr(
                         settings, "dji_rc_calibration_file", "") or None,
+                    control_config_path=getattr(
+                        settings, "dji_control_config", "") or None,
                 )
                 try:
                     _dji.connect()
