@@ -69,6 +69,16 @@ cd backend
 
 ## DRC 实时控制用法
 
+**前端摇杆面板**（`/dashboard/dji-control`，导航"DJI 摇杆"）：双虚拟摇杆——左杆油门/偏航、右杆俯仰/横滚，拖动时每 100ms 下发一次 DRC，松手自动回中；带四轴实时值、后端回显、返航/悬停/直播快捷指令和安全警告。对应后端 API：
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/v1/dji/status` | 连接器状态 / 飞机列表 / 各机 last_drc / 状态 / 重连次数 |
+| `POST /api/v1/dji/drc` | `{drone_sn, throttle, yaw, pitch, roll}` 四轴 [-1,1] |
+| `POST /api/v1/dji/action` | `{action: return_home\|hover\|live_start\|mission, drone_sn, ...}` |
+
+代码直调：
+
 ```python
 connector.send_drc("MOCKM300-01", throttle=0.5, yaw=0.1, pitch=0.0, roll=-0.2)
 # 轴取值 [-1,1]，打包进 drc 整数，QoS0 高频下发
@@ -82,4 +92,4 @@ connector.send_drc("MOCKM300-01", throttle=0.5, yaw=0.1, pitch=0.0, roll=-0.2)
 - `mode="cloud"` 尚未做 MQTT TLS/clientAuth 配置（真机 8883 端口需要）
 - OSD→canonical 映射覆盖主要字段，云台/负载/告警字段待按需扩展
 - 航线是 waypoint 列表骨架，非 WPML KMZ；断点续飞 (`flighttask_progress`) 未实现
-- DRC 已实现指令下发与四轴打包，但未接前端摇杆 UI（当前仅 API/代码调用）；飞控闭环（读 DRC reply + 状态回传）待真机联调
+- DRC 已实现指令下发、四轴打包与前端摇杆面板；飞控闭环（读 DRC reply + 状态回传）待真机联调
