@@ -14,11 +14,13 @@ import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
+from app.config import settings
 from app.deps import get_current_user_optional
 from app.models.user import User
+from app.services.dji_preflight import DJIPreflight
 
 router = APIRouter(prefix="/dji", tags=["dji"])
 
@@ -82,6 +84,39 @@ class RCCalibrationBody(BaseModel):
 class CalibrationBody(BaseModel):
     drone_sn: str
     item: str = Field(..., description="compass | imu | gimbal | vision | rc")
+
+
+def _preflight(request: Request) -> DJIPreflight:
+    """Preflight works even when the DJI connector is not mounted."""
+    return DJIPreflight(
+        connector=getattr(request.app.state, "dji_connector", None),
+        settings=settings,
+    )
+
+
+@router.get("/preflight")
+async def dji_preflight(
+    request: Request,
+    user: User = Depends(get_current_user_optional),
+) -> Dict[str, Any]:
+    """Structured real-device readiness report (no secrets exposed)."""
+    return _preflight(request).report()
+
+
+@router.get("/preflight/markdown")
+async def dji_preflight_markdown(
+    request: Request,
+    user: User = Depends(get_current_user_optional),
+) -> Any:
+    """Download the same checklist as a checkable Markdown document."""
+    preflight = _preflight(request)
+    return PlainTextResponse(
+        preflight.markdown(),
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="dji-preflight-checklist.md"'
+        },
+    )
 
 
 @router.get("/status")

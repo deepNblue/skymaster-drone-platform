@@ -1,0 +1,411 @@
+{
+  "_comment": "DJI real-device preflight checklist. Every item is data-driven: source/key locate the current value, check defines the automatic verdict, verify is the field that must be confirmed against the actual firmware / DJI workspace. No secrets are stored here.",
+  "version": "1.0",
+  "placeholder_values": ["MOCKDOCK001", "127.0.0.1", "localhost", "TODO", "XXX", "changeme", ""],
+  "groups": [
+    {
+      "id": "link",
+      "title": "链路接入",
+      "description": "MQTT workspace 凭据、网关 SN 与运行模式。真机联调前必须全部通过。",
+      "items": [
+        {
+          "id": "mode_cloud",
+          "title": "运行模式",
+          "source": "runtime",
+          "key": "mode",
+          "check": "equals",
+          "expected": "cloud",
+          "verify": "真机必须为 mode=cloud（DJI_MODE=cloud）；mock 模式不会连接 MQTT"
+        },
+        {
+          "id": "gateway_sn",
+          "title": "网关 SN",
+          "source": "runtime",
+          "key": "gateway_sn",
+          "check": "not_placeholder",
+          "verify": "替换为 DJI Dock / 遥控器真实 SN（DJI_GATEWAY_SN）"
+        },
+        {
+          "id": "broker_host",
+          "title": "MQTT Broker 地址",
+          "source": "runtime",
+          "key": "broker_host",
+          "check": "not_local_host",
+          "verify": "使用 DJI 开发者平台 workspace 下发的 MQTT 域名/地址，不是 127.0.0.1"
+        },
+        {
+          "id": "broker_port",
+          "title": "MQTT Broker 端口",
+          "source": "runtime",
+          "key": "broker_port",
+          "check": "tls_port_match",
+          "verify": "核对 workspace 下发端口：8883(MQTT/TLS) 或 443(HTTPS 通道)"
+        },
+        {
+          "id": "client_id",
+          "title": "MQTT Client ID",
+          "source": "runtime",
+          "key": "client_id",
+          "check": "not_placeholder",
+          "verify": "按 DJI workspace 生成的 clientId 填入（DJI_CLIENT_ID）"
+        },
+        {
+          "id": "username",
+          "title": "MQTT 用户名",
+          "source": "runtime",
+          "key": "username",
+          "check": "configured",
+          "secret": true,
+          "verify": "从 DJI workspace 凭据下载页获取（DJI_USERNAME），不要写进代码库"
+        },
+        {
+          "id": "password",
+          "title": "MQTT 密码",
+          "source": "runtime",
+          "key": "password",
+          "check": "configured",
+          "secret": true,
+          "verify": "从 DJI workspace 凭据下载页获取（DJI_PASSWORD），仅走环境变量"
+        },
+        {
+          "id": "paho_mqtt",
+          "title": "paho-mqtt 依赖",
+          "source": "runtime",
+          "key": "paho_installed",
+          "check": "truthy",
+          "verify": "cloud 模式需要 pip install paho-mqtt"
+        },
+        {
+          "id": "aircraft_bound",
+          "title": "飞机 SN 已绑定",
+          "source": "runtime",
+          "key": "aircraft_count",
+          "check": "positive_number",
+          "verify": "数据库 Drone 需 protocol='dji' 且 meta.dji_device_sn 为真实 SN"
+        }
+      ]
+    },
+    {
+      "id": "tls",
+      "title": "TLS / clientAuth",
+      "description": "证书链与 TLS 参数按 DJI workspace 实际下发值核对，密文不入库。",
+      "items": [
+        {
+          "id": "tls_enabled",
+          "title": "TLS 开关",
+          "source": "config:tls",
+          "key": "tls.enabled",
+          "check": "truthy",
+          "verify": "真机应开启 TLS"
+        },
+        {
+          "id": "ca_certs",
+          "title": "CA 根证书",
+          "source": "config:tls",
+          "key": "tls.ca_certs",
+          "check": "file_exists_if_set",
+          "verify": "填入 DJI 下发的 CA 证书路径，证书文件需放在后端可读取的位置"
+        },
+        {
+          "id": "client_auth",
+          "title": "双向认证模式",
+          "source": "config:tls",
+          "key": "tls.client_auth",
+          "check": "manual",
+          "verify": "none / server / required 需与 DJI workspace 的认证方式一致"
+        },
+        {
+          "id": "client_cert_pair",
+          "title": "客户端证书/私钥",
+          "source": "config:tls",
+          "key": "tls.certfile",
+          "check": "client_cert_pair",
+          "verify": "若 client_auth=required，certfile/keyfile 必须成对配置且文件存在"
+        },
+        {
+          "id": "tls_version",
+          "title": "TLS 版本",
+          "source": "config:tls",
+          "key": "tls.tls_version",
+          "check": "manual",
+          "verify": "默认 TLSv1_2；按固件/平台支持版本核对"
+        },
+        {
+          "id": "insecure_skip_verify",
+          "title": "跳过证书校验",
+          "source": "config:tls",
+          "key": "tls.insecure_skip_verify",
+          "check": "falsy",
+          "verify": "真机必须 false；仅在临时排障时短暂开启"
+        }
+      ]
+    },
+    {
+      "id": "telemetry",
+      "title": "遥测 / 物模型",
+      "description": "OSD 与状态上报字段按实际固件物模型核对，字段不匹配会导致遥测缺失或状态误判。",
+      "items": [
+        {
+          "id": "osd_topic",
+          "title": "OSD 上报 topic",
+          "source": "constant",
+          "value": "thing/product/{sn}/osd",
+          "check": "manual",
+          "verify": "确认固件实际 OSD topic 模板与 gateway/aircraft SN 层级"
+        },
+        {
+          "id": "osd_fields",
+          "title": "OSD 字段映射",
+          "source": "constant",
+          "value": "lat/lng/alt/height/speed/heading/roll/pitch/yaw/battery/gps_sats",
+          "check": "manual",
+          "verify": "云台/负载/告警字段待按需扩展；核对固件字段名与单位"
+        },
+        {
+          "id": "state_topic",
+          "title": "状态 topic",
+          "source": "constant",
+          "value": "thing/product/{sn}/state",
+          "check": "manual",
+          "verify": "确认 state topic 是否存在及其事件枚举"
+        },
+        {
+          "id": "services_reply",
+          "title": "services_reply 绑定",
+          "source": "runtime",
+          "key": "pending_calibration",
+          "check": "manual",
+          "verify": "核对 bid/tid 回显与 item/drone_sn 字段；当前未匹配请求数见值"
+        }
+      ]
+    },
+    {
+      "id": "drc",
+      "title": "DRC 摇杆控制",
+      "description": "四轴打包与回执解析已闭环；真机需核对回包字段名和链路延迟阈值。",
+      "items": [
+        {
+          "id": "ack_fields",
+          "title": "DRC 回执字段",
+          "source": "config:control",
+          "key": "drc.ack_fields",
+          "check": "manual",
+          "verify": "固件回包必须命中配置中的某个字段名，否则收不到 ack"
+        },
+        {
+          "id": "ack_timeout_ms",
+          "title": "回执超时阈值",
+          "source": "config:control",
+          "key": "drc.ack_timeout_ms",
+          "check": "manual",
+          "verify": "按真机实测 RTT 调整（默认 3000ms）"
+        },
+        {
+          "id": "ack_delay_ms",
+          "title": "模拟回执延迟",
+          "source": "config:control",
+          "key": "drc.ack_delay_ms",
+          "check": "manual",
+          "verify": "mock 模式参数，真机联调可忽略"
+        },
+        {
+          "id": "seq_wrap",
+          "title": "序列号宽度",
+          "source": "config:control",
+          "key": "drc.seq_wrap",
+          "check": "manual",
+          "verify": "当前 16-bit；核对固件 DRC seq 位宽"
+        }
+      ]
+    },
+    {
+      "id": "calibration",
+      "title": "校准中心",
+      "description": "校准方法名与状态枚举按固件物模型核对；配置里的时长与九步采集可自由调。",
+      "items": [
+        {
+          "id": "calibration_method",
+          "title": "校准下发方法",
+          "source": "constant",
+          "value": "calibration",
+          "check": "manual",
+          "verify": "services 方法名需与固件物模型一致"
+        },
+        {
+          "id": "sensor_items",
+          "title": "传感器校准项",
+          "source": "config:calibration",
+          "key": "sensor_calibration",
+          "check": "manual",
+          "verify": "compass/imu/gimbal/vision 的 key 与 duration 需按真机调整"
+        },
+        {
+          "id": "reply_state_map",
+          "title": "回包状态枚举",
+          "source": "constant",
+          "value": "running/in_progress/calibrating → running; done/complete/success → success",
+          "check": "manual",
+          "verify": "按 services_reply 实际枚举核对（另支持 0..4 数字枚举）"
+        },
+        {
+          "id": "rc_steps",
+          "title": "摇杆九点采集",
+          "source": "config:calibration",
+          "key": "rc_calibration.steps",
+          "check": "manual",
+          "verify": "真机摇杆通道方向/量程不同则需改 steps 与 deadzone"
+        }
+      ]
+    },
+    {
+      "id": "mission",
+      "title": "飞行任务 / 断点续飞",
+      "description": "状态字段、进度字段、断点索引基准是联调最容易踩坑的部分。",
+      "items": [
+        {
+          "id": "state_fields",
+          "title": "状态字段名",
+          "source": "config:mission",
+          "key": "mission.state_fields",
+          "check": "manual",
+          "verify": "flighttask_progress 实际状态字段需命中此列表"
+        },
+        {
+          "id": "progress_fields",
+          "title": "进度字段名",
+          "source": "config:mission",
+          "key": "mission.progress_fields",
+          "check": "manual",
+          "verify": "核对 0..100 还是 0..1，字段名需命中此列表"
+        },
+        {
+          "id": "breakpoint_fields",
+          "title": "断点索引字段",
+          "source": "config:mission",
+          "key": "mission.breakpoint_fields",
+          "check": "manual",
+          "verify": "核对固件上报的航点索引字段名"
+        },
+        {
+          "id": "breakpoint_offset",
+          "title": "断点索引基准",
+          "source": "config:mission",
+          "key": "mission.breakpoint_offset",
+          "check": "manual",
+          "verify": "0-based 填 0，1-based 填 1；真机回包核对后修改"
+        },
+        {
+          "id": "resume_field",
+          "title": "续飞参数名",
+          "source": "config:mission",
+          "key": "mission.resume_field",
+          "check": "manual",
+          "verify": "flighttask_resume 下发的续飞字段名按固件核对"
+        },
+        {
+          "id": "route_altitude",
+          "title": "12309 航线限高",
+          "source": "config:routes",
+          "key": "routes",
+          "check": "max_altitude",
+          "expected": 150,
+          "verify": "南宁 12309 预设航线须低于 150m 限高"
+        }
+      ]
+    },
+    {
+      "id": "wpml",
+      "title": "WPML / KMZ 航线文件",
+      "description": "KMZ 骨架已生成；高级动作与命名空间需按固件物模型核对后才能上传真机。",
+      "items": [
+        {
+          "id": "wpml_namespace",
+          "title": "WPML 命名空间",
+          "source": "config:wpml",
+          "key": "wpml.wpml_namespace",
+          "check": "manual",
+          "verify": "默认 wpmz/1.0.2；按 DJI 平台支持版本核对"
+        },
+        {
+          "id": "mission_config",
+          "title": "飞行配置参数",
+          "source": "config:wpml",
+          "key": "wpml.mission_config",
+          "check": "manual",
+          "verify": "失联动作/返航高度/枚举值按机型与作业场景核对"
+        },
+        {
+          "id": "waypoint_actions",
+          "title": "航点高级动作",
+          "source": "config:wpml",
+          "key": "wpml.waypoint.actions",
+          "check": "manual",
+          "verify": "当前为空；POI/拍照/变焦等动作需按固件支持程度补充"
+        },
+        {
+          "id": "kmz_dir",
+          "title": "KMZ 输出目录",
+          "source": "backend_path:wpml.kmz.output_dir",
+          "key": "",
+          "check": "dir_writable",
+          "verify": "目录需可写；生成物在 /dji/mission/kmz 下载"
+        }
+      ]
+    },
+    {
+      "id": "files",
+      "title": "配置文件完整性",
+      "description": "所有 DJI 参数都在独立文件，缺失会导致安全降级。",
+      "items": [
+        {
+          "id": "file_calibration",
+          "title": "校准配置",
+          "source": "runtime_path:calibration_config_path",
+          "key": "dji_calibration.json",
+          "check": "file_exists",
+          "verify": "backend/config/dji_calibration.json（可由 DJI_CALIBRATION_CONFIG 覆盖）"
+        },
+        {
+          "id": "file_control",
+          "title": "DRC 控制配置",
+          "source": "runtime_path:control_config_path",
+          "key": "dji_control.json",
+          "check": "file_exists",
+          "verify": "backend/config/dji_control.json（可由 DJI_CONTROL_CONFIG 覆盖）"
+        },
+        {
+          "id": "file_mission",
+          "title": "任务配置",
+          "source": "runtime_path:mission_config_path",
+          "key": "dji_mission.json",
+          "check": "file_exists",
+          "verify": "backend/config/dji_mission.json（可由 DJI_MISSION_CONFIG 覆盖）"
+        },
+        {
+          "id": "file_routes",
+          "title": "航线配置",
+          "source": "runtime_path:mission_routes_path",
+          "key": "dji_mission_routes.json",
+          "check": "file_exists",
+          "verify": "backend/config/dji_mission_routes.json（可由 DJI_MISSION_ROUTES 覆盖）"
+        },
+        {
+          "id": "file_tls",
+          "title": "TLS 配置",
+          "source": "runtime_path:tls_config_path",
+          "key": "dji_mqtt_tls.json",
+          "check": "file_exists",
+          "verify": "backend/config/dji_mqtt_tls.json（可由 DJI_MQTT_TLS_CONFIG 覆盖）"
+        },
+        {
+          "id": "file_wpml",
+          "title": "WPML 配置",
+          "source": "runtime_path:wpml_config_path",
+          "key": "dji_wpml.json",
+          "check": "file_exists",
+          "verify": "backend/config/dji_wpml.json（可由 DJI_WPML_CONFIG 覆盖）"
+        }
+      ]
+    }
+  ]
+}

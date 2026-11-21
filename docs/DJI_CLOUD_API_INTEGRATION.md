@@ -174,6 +174,34 @@ connector.apply_rc_axis("MOCKM300-01", "throttle", 0.5)
 
 前端页面提供航线卡片选择、航点表格、任务进度与操作日志；执行完成后显示「航线执行完成」。旧端点 `POST /dji/action` 的 `mission` 动作保留兼容，内部已改用真实 task_id（不再硬编码 `api-task`）。
 
+## 真机联调核对（`/dashboard/preflight`，导航「真机联调」）
+
+**参数独立文件**：核对项定义在 `backend/config/dji_preflight.json`——每项声明
+`source` / `key`（当前值位置）、`check`（自动判定规则）、`expected`（期望值）与
+`verify`（必须在真机核对的字段说明）。可用 `DJI_PREFLIGHT_CONFIG` 环境变量覆盖路径。
+新增固件核对项只改 JSON，不改代码。
+
+当前共 **43 项 / 8 组**：链路接入、TLS/clientAuth、遥测物模型、DRC 摇杆、校准中心、
+飞行任务与断点续飞、WPML/KMZ、配置文件完整性。判定结果分四态：
+`pass`（自动通过）、`warn`（警告，不阻塞）、`fail`（阻塞真机联调）、`manual`（人工核对）。
+`ready=true` 的条件是没有 `fail`；`manual` 项需逐条按 `verify` 说明与固件回包核对。
+
+敏感信息不落盘也不回显：`dji_username` / `dji_password` 等只显示「已配置 / 未配置」，
+报告与 Markdown 中不含任何凭据值。
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/v1/dji/preflight` | 结构化报告：汇总、分组、逐项值/状态/核对说明、运行时快照（不含密码） |
+| `GET /api/v1/dji/preflight/markdown` | 同一报告导出为可勾选的 Markdown 清单（附件下载） |
+
+前端页面展示就绪状态与统计、分组清单、逐项勾选（状态存浏览器 `localStorage`）、
+进度条以及「复制清单 / 下载 Markdown」。联调前建议流程：
+
+1. 按「真机启用步骤」配好 `DJI_MODE=cloud`、workspace 凭据、真实网关与飞机 SN；
+2. 打开 `/dashboard/preflight`，先清掉所有 `fail`（通常是 mock 默认值与本地地址）；
+3. 对 `manual` 项按 `verify` 说明逐条核对固件物模型回包，勾选记录；
+4. 下载 Markdown 清单随联调记录归档；固件字段变更后同步修改对应 `dji_*.json` 配置。
+
 ## 已知限制
 
 - `mode="cloud"` 已支持 TLS/clientAuth（按端口自动启用，参数在 `dji_mqtt_tls.json`）；真机证书链、TLS 版本与 MQTT 用户名密码需按 DJI 开发者平台实际下发值核对
