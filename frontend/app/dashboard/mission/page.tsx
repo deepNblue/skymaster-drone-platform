@@ -9,7 +9,7 @@ import {
 import {
   RocketOutlined, CompassOutlined, ReloadOutlined, PlayCircleOutlined,
   PauseCircleOutlined, CaretRightOutlined, CloseCircleOutlined,
-  CheckCircleOutlined, WarningOutlined, CloudUploadOutlined,
+  CheckCircleOutlined, WarningOutlined, CloudUploadOutlined, DownloadOutlined,
 } from '@ant-design/icons';
 import { api } from '@/lib/api';
 
@@ -26,6 +26,13 @@ const CYAN = '#36cfc9';
 const AMBER_TEXT = '#ffd591';
 
 type Waypoint = { lat: number; lng: number; alt: number };
+type KmzMeta = {
+  filename: string;
+  wpml_file: string;
+  size_bytes: number;
+  sha256: string;
+  waypoint_count: number;
+};
 type Route = {
   id: string;
   name: string;
@@ -40,6 +47,7 @@ type Mission = {
   idx: number;
   state: string;
   progress: number;
+  kmz?: KmzMeta;
   message?: string;
   created_at: number;
   updated_at: number;
@@ -166,6 +174,30 @@ export default function MissionPage() {
       message.error(detail);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const downloadKmz = async (taskId: string, filename: string) => {
+    try {
+      const r = await api.get('/api/v1/dji/mission/kmz', {
+        params: { task_id: taskId }, responseType: 'blob',
+      });
+      const blob = new Blob([r.data], {
+        type: 'application/vnd.google-earth.kmz',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      log(`下载航线文件 ${filename}`, 'ok');
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail || 'KMZ 下载失败';
+      message.error(detail);
+      log(detail, 'err');
     }
   };
 
@@ -340,6 +372,32 @@ export default function MissionPage() {
                       <span>flight {m.flight_id?.slice(0, 8)}</span>
                       <span style={{ marginLeft: 'auto' }}>{m.message}</span>
                     </div>
+                    {m.kmz && (
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        border: `1px dashed ${PANEL_BORDER}`, borderRadius: 6,
+                        padding: '6px 8px', marginBottom: 8,
+                        background: 'rgba(54,207,201,0.04)',
+                      }}>
+                        <Tooltip title={`WPML ${m.kmz.wpml_file} · ${m.kmz.waypoint_count} 航点 · sha256 ${m.kmz.sha256.slice(0, 16)}…`}>
+                          <span style={{ color: CYAN, fontSize: 11, fontFamily: 'monospace' }}>
+                            <CloudUploadOutlined /> {m.kmz.filename}
+                          </span>
+                        </Tooltip>
+                        <span style={{ color: '#7f96b8', fontSize: 10 }}>
+                          {(m.kmz.size_bytes / 1024).toFixed(1)} KB · WPML
+                        </span>
+                        <Tooltip title="下载 KMZ（可上传至 DJI 平台）">
+                          <Button
+                            type="link" size="small" icon={<DownloadOutlined />}
+                            style={{ marginLeft: 'auto', height: 20, padding: '0 4px', color: CYAN }}
+                            onClick={() => downloadKmz(m.task_id, m.kmz!.filename)}
+                          >
+                            下载
+                          </Button>
+                        </Tooltip>
+                      </div>
+                    )}
                     <div style={{ display: 'flex', gap: 8 }}>
                       {m.state === 'prepared' && (
                         <Button size="small" type="primary" icon={<PlayCircleOutlined />}

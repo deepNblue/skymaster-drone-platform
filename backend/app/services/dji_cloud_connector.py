@@ -27,8 +27,9 @@ Protocol notes (DJI Cloud API v2 / Edge SDK V2):
     * Envelope: ``bid`` (business uuid), ``tid`` (technical uuid),
       ``timestamp`` (ms), ``method``, ``data``, ``gateway`` (on reply),
       ``need_reply`` (0/1).
-    * Waypoint missions use WPML (KMZ); here we carry a waypoint list in
-      ``data`` as a skeleton — swap in a real WPML file when a Dock is present.
+    * Waypoint missions use WPML (KMZ). We generate a config-driven WPML
+      wayline and package it as KMZ; the raw waypoint list stays in ``data``
+      as a compatibility skeleton for mock/tests.
     * OSD fields are DJI-specific (``latitude``/``longitude``/``altitude``/
       ``height``/``gimbal`` etc.); :meth:`parse_osd` maps them to SkyMaster's
       canonical telemetry slot used by MAVLink.
@@ -39,12 +40,16 @@ constructor kwargs — never hard-coded.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import io
 import json
 import logging
 import math
 import os
 import ssl
+import zipfile
 from pathlib import Path
+from xml.sax.saxutils import escape
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -89,6 +94,7 @@ DEFAULT_CONTROL_CONFIG = _BACKEND_ROOT / "config" / "dji_control.json"
 DEFAULT_MISSION_CONFIG = _BACKEND_ROOT / "config" / "dji_mission.json"
 DEFAULT_MISSION_ROUTES = _BACKEND_ROOT / "config" / "dji_mission_routes.json"
 DEFAULT_TLS_CONFIG = _BACKEND_ROOT / "config" / "dji_mqtt_tls.json"
+DEFAULT_WPML_CONFIG = _BACKEND_ROOT / "config" / "dji_wpml.json"
 
 # Canonical telemetry keys shared with MavlinkConnector._slot().
 _TELEMETRY_KEYS = (
@@ -205,6 +211,7 @@ class DJICloudConnector:
         mission_config_path: Optional[str] = None,
         mission_routes_path: Optional[str] = None,
         tls_config_path: Optional[str] = None,
+        wpml_config_path: Optional[str] = None,
     ) -> None:
         if mode not in ("mock", "cloud"):
             raise ValueError(f"invalid DJI connector mode: {mode!r}")
@@ -270,6 +277,10 @@ class DJICloudConnector:
         self.tls_config: Dict[str, Any] = self._load_json_config(
             tls_config_path, DEFAULT_TLS_CONFIG, "mqtt tls config")
         self._tls_active = False
+
+        # --- WPML / KMZ wayline generation (config-driven) ----------------
+        self.wpml_config: Dict[str, Any] = self._load_json_config(
+            wpml_config_path, DEFAULT_WPML_CONFIG, "wpml config")
 
     # ---------------------------------------------------------------- topics
     def topic(self, template: str, sn: Optional[str] = None) -> str:
@@ -388,6 +399,155 @@ class DJICloudConnector:
             "insecure=%s", self.broker_port, auth, bool(ca),
             "certfile" in kwargs, insecure)
         return True
+
+    # ------------------------------------------------------------------ wpml
+    def _wpml_cfg(self) -> Dict[str, Any]:
+        return self.wpml_config.get("wpml") or {}
+
+    @staticmethod
+    def _xml_leaf(tag: str, value: Any, indent: str = "      ") -> str:
+        return f"{indent}<wpml:{tag}>{escape(str(value))}</wpml:{tag}>"
+
+    def build_wpml(
+        self, waypoints: List[Dict[str, float]],
+        task_id: str = "", flight_id: str = "",
+    ) -> str:
+        """Render a DJI WPML wayline document from normalized waypoints."""
+        cfg = self._wpml_cfg()
+        mission = cfg.get("mission_config") or {}
+        line = cfg.get("wayline") or {}
+        wp = cfg.get("waypoint") or {}
+        leaf = self._xml_leaf
+
+        kml_ns = str(cfg.get("kml_namespace")
+                     or "http://www.opengis.net/kml/2.2")
+        wpml_ns = str(cfg.get("wpml_namespace")
+                      or "http://www.dji.com/wpmz/1.0.2")
+        lines: List[str] = [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            f'<kml xmlns="{escape(kml_ns)}" xmlns:wpml="{escape(wpml_ns)}">',
+            "  <Document>",
+            "    <wpml:missionConfig>",
+        ]
+        mission_tags = (
+            ("fly_to_wayline_mode", "flyToWaylineMode"),
+            ("finish_action", "finishAction"),
+            ("exit_on_rc_lost", "exitOnRCLost"),
+            ("execute_rc_lost_action", "executeRCLostAction"),
+            ("take_off_security_height_m", "takeOffSecurityHeight"),
+            ("global_transitional_speed_m_s", "globalTransitionalSpeed"),
+        )
+        for key, tag in mission_tags:
+            if key in mission:
+                lines.append(leaf(tag, mission[key]))
+        for group, pairs in (
+            ("drone", (("drone_enum_value", "droneEnumValue"),
+                       ("drone_sub_enum_value", "droneSubEnumValue"))),
+            ("payload", (("payload_enum_value", "payloadEnumValue"),
+                         ("payload_sub_enum_value", "payloadSubEnumValue"))),
+        ):
+            if any(key in mission for key, _ in pairs):
+                lines.append(f"      <wpml:{group}Info>")
+                for key, tag in pairs:
+                    if key in mission:
+                        lines.append(leaf(tag, mission[key], "        "))
+                lines.append(f"      </wpml:{group}Info>")
+        lines += ["    </wpml:missionConfig>", "    <Folder>"]
+        for key, tag in (("template_id", "templateId"),
+                         ("wayline_id", "waylineId"),
+                         ("auto_flight_speed_m_s", "autoFlightSpeed")):
+            if key in line:
+                lines.append(leaf(tag, line[key]))
+        if task_id:
+            lines.append(leaf("waylineName", task_id))
+        if flight_id:
+            lines.append(leaf("missionName", flight_id))
+        lines += [
+            "      <wpml:waylineCoordinateSysParam>",
+            leaf("coordinateMode", line.get("coordinate_mode", "WGS84"), "        "),
+            leaf("positioningType", line.get("positioning_type", "GPS"), "        "),
+            leaf("heightMode",
+                 line.get("height_mode", "relativeToStartPoint"), "        "),
+            "      </wpml:waylineCoordinateSysParam>",
+        ]
+        actions = wp.get("actions") or []
+        for idx, waypoint in enumerate(waypoints):
+            alt = float(waypoint.get("alt", 0.0))
+            lines += [
+                "      <Placemark>",
+                leaf("index", idx),
+                leaf("executeHeight", alt),
+            ]
+            if "speed_m_s" in wp:
+                lines.append(leaf("waypointSpeed", wp["speed_m_s"]))
+            lines += [
+                "        <wpml:waypointHeadingParam>",
+                leaf("waypointHeadingMode",
+                     wp.get("heading_mode", "followWayline"), "          "),
+                "        </wpml:waypointHeadingParam>",
+                "        <wpml:waypointTurnParam>",
+                leaf("waypointTurnMode",
+                     wp.get("turn_mode", "smooth"), "          "),
+            ]
+            if "turn_radius_m" in wp:
+                lines.append(
+                    leaf("waypointTurnRadius", wp["turn_radius_m"], "          "))
+            lines.append("        </wpml:waypointTurnParam>")
+            for action in actions:
+                if isinstance(action, dict):
+                    lines.append("        <wpml:action>")
+                    for key, value in action.items():
+                        lines.append(leaf(str(key), value, "          "))
+                    lines.append("        </wpml:action>")
+            lines += [
+                "        <Point>",
+                f"          <coordinates>{waypoint['lng']},{waypoint['lat']},{alt}</coordinates>",
+                "        </Point>",
+                "      </Placemark>",
+            ]
+        lines += ["    </Folder>", "  </Document>", "</kml>", ""]
+        return "\n".join(lines)
+
+    def generate_kmz(
+        self, waypoints: List[Dict[str, float]], task_id: str,
+        flight_id: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """Write a WPML KMZ into the configured data dir; return metadata."""
+        cfg = self._wpml_cfg()
+        kmz_cfg = cfg.get("kmz") or {}
+        out_dir = Path(str(kmz_cfg.get("output_dir") or "data/kmz"))
+        if not out_dir.is_absolute():
+            out_dir = _BACKEND_ROOT / out_dir
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            wpl_name = str(cfg.get("file_name") or "wpl211.xml")
+            wpl = self.build_wpml(waypoints, task_id, flight_id)
+            compression = (zipfile.ZIP_DEFLATED
+                           if str(kmz_cfg.get("compression") or "deflate").lower()
+                           == "deflate" else zipfile.ZIP_STORED)
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", compression) as zf:
+                zf.writestr(wpl_name, wpl.encode("utf-8"))
+                if bool(kmz_cfg.get("include_doc_kml", False)):
+                    zf.writestr("doc.kml", wpl.encode("utf-8"))
+            payload = buf.getvalue()
+            path = out_dir / f"{task_id}.kmz"
+            path.write_bytes(payload)
+            meta = {
+                "path": str(path),
+                "filename": path.name,
+                "wpml_file": wpl_name,
+                "size_bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "waypoint_count": len(waypoints),
+                "created_at": time.time(),
+            }
+            logger.info("WPML KMZ generated: %s (%d bytes)",
+                        path.name, len(payload))
+            return meta
+        except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            logger.warning("WPML KMZ generation failed for %s: %s", task_id, exc)
+            return None
 
     # ---------------------------------------------------------------- conn
     def connect(self) -> Any:
@@ -613,27 +773,35 @@ class DJICloudConnector:
     def flighttask_prepare(self, drone_sn: str, waypoints: List[Dict[str, Any]],
                            flight_id: Optional[str] = None,
                            task_id: Optional[str] = None) -> bool:
-        """Prepare a waypoint mission. Real deployments attach a WPML KMZ file."""
+        """Prepare a waypoint mission with a generated WPML KMZ attached."""
         task_id = task_id or str(uuid.uuid4())
         flight_id = flight_id or str(uuid.uuid4())
         normalized = self._normalize_waypoints(waypoints)
         now = time.time()
-        self._missions[task_id] = {
+        kmz = self.generate_kmz(normalized, task_id, flight_id)
+        slot: Dict[str, Any] = {
             "task_id": task_id, "flight_id": flight_id,
             "drone_sn": drone_sn, "waypoints": normalized,
             "idx": 0, "state": "prepared", "progress": 0.0,
             "message": "任务已准备，等待执行",
             "created_at": now, "updated_at": now,
         }
+        if kmz:
+            slot["kmz"] = kmz
+        self._missions[task_id] = slot
         self._mission_by_sn[str(drone_sn)] = task_id
-        return self.publish_service(METHOD_TASK_PREPARE, {
+        payload: Dict[str, Any] = {
             "flight_id": flight_id,
             "task_id": task_id,
             "task_type": 0,
             "drone_sn": drone_sn,
-            # Skeleton: real Cloud API expects a KMZ reference here (WPML).
+            # Kept for mock/tests; real Cloud API consumes the KMZ reference.
             "waypoints": normalized,
-        })
+        }
+        if kmz:
+            payload["kmz_file"] = kmz["filename"]
+            payload["kmz_sha256"] = kmz["sha256"]
+        return self.publish_service(METHOD_TASK_PREPARE, payload)
 
     @staticmethod
     def _task_data(task_id: str, slot: Optional[Dict[str, Any]]) -> Dict[str, Any]:

@@ -1,0 +1,41 @@
+{
+  "_comment": "DJI WPML (Waypoint Markup Language) generation parameters. Values follow common Cloud API v2 / M300 conventions; confirm against the actual firmware object model before real-device flights.",
+  "wpml": {
+    "version": "1.0.2",
+    "kml_namespace": "http://www.opengis.net/kml/2.2",
+    "wpml_namespace": "http://www.dji.com/wpmz/1.0.2",
+    "file_name": "wpl211.xml",
+    "mission_config": {
+      "fly_to_wayline_mode": "safely",
+      "finish_action": "goHome",
+      "exit_on_rc_lost": "executeLostAction",
+      "execute_rc_lost_action": "goBack",
+      "take_off_security_height_m": 20.0,
+      "global_transitional_speed_m_s": 10.0,
+      "drone_enum_value": 67,
+      "drone_sub_enum_value": 0,
+      "payload_enum_value": 1,
+      "payload_sub_enum_value": 0
+    },
+    "wayline": {
+      "template_id": 0,
+      "wayline_id": 0,
+      "coordinate_mode": "WGS84",
+      "positioning_type": "GPS",
+      "height_mode": "relativeToStartPoint",
+      "auto_flight_speed_m_s": 10.0
+    },
+    "waypoint": {
+      "speed_m_s": 10.0,
+      "heading_mode": "followWayline",
+      "turn_mode": "smooth",
+      "turn_radius_m": 2.0,
+      "actions": []
+    },
+    "kmz": {
+      "output_dir": "data/kmz",
+      "include_doc_kml": false,
+      "compression": "deflate"
+    }
+  }
+}

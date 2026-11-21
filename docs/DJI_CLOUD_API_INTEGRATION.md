@@ -32,9 +32,9 @@ cd backend
 .venv/bin/python -m pytest tests/test_dji_drc_ack.py tests/test_dji_cloud_connector.py \
   tests/test_dji_calibration.py tests/test_dji_calibration_reply.py \
   tests/test_dji_mission.py tests/test_dji_mission_api.py \
-  tests/test_dji_mqtt_tls.py tests/test_dji_api.py \
+  tests/test_dji_mqtt_tls.py tests/test_dji_wpml.py tests/test_dji_api.py \
   tests/test_dji_calibration_api.py -q
-# 95 passed（含 DRC 回执、校准 reply、任务状态机、MQTT TLS/clientAuth、API 边界校验）
+# 104 passed（含 DRC 回执、校准 reply、任务状态机、MQTT TLS/clientAuth、WPML/KMZ、API 边界校验）
 ```
 
 ## 真机启用步骤（硬件到位后）
@@ -156,12 +156,20 @@ connector.apply_rc_axis("MOCKM300-01", "throttle", 0.5)
 | `POST /api/v1/dji/mission/prepare` | `{drone_sn, route_id? , waypoints?}` 下发任务，返回 task_id |
 | `POST /api/v1/dji/mission/control` | `{task_id, action: execute\|pause\|resume\|cancel}` 控制任务 |
 
+**WPML / KMZ 生成**：参数在独立文件 `backend/config/dji_wpml.json`（WPML 命名空间、飞行配置、航点属性、航点动作、KMZ 输出目录与压缩方式），可用 `DJI_WPML_CONFIG` 覆盖路径。`create_mission()` / `flighttask_prepare()` 会把归一化航点渲染为 WPML wayline（`wpl211.xml`），打包成 KMZ 写入 `backend/data/kmz/`，并记录文件名、大小、sha256、航点数；prepare 下发体同时带 `kmz_file` / `kmz_sha256` 引用。生成失败时安全降级为裸航点列表，不阻断任务。
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/v1/dji/mission/kmz?task_id=` | 下载生成的 WPML KMZ（`application/vnd.google-earth.kmz`） |
+
+前端任务卡片显示 KMZ 文件名、大小与 WPML 摘要，提供下载按钮（可上传至 DJI 平台）。生成物是骨架 XML，字段按 DJI 常见约定，真机联调需按固件物模型核对。
+
 前端页面提供航线卡片选择、航点表格、任务进度与操作日志；执行完成后显示「航线执行完成」。旧端点 `POST /dji/action` 的 `mission` 动作保留兼容，内部已改用真实 task_id（不再硬编码 `api-task`）。
 
 ## 已知限制
 
 - `mode="cloud"` 已支持 TLS/clientAuth（按端口自动启用，参数在 `dji_mqtt_tls.json`）；真机证书链、TLS 版本与 MQTT 用户名密码需按 DJI 开发者平台实际下发值核对
 - OSD→canonical 映射覆盖主要字段，云台/负载/告警字段待按需扩展
-- 航线仍是 waypoint 列表骨架，非 WPML KMZ；断点续飞未实现（`flighttask_progress` 已用于进度状态回传，不等于断点续飞）
+- 已生成 WPML KMZ 骨架（字段按 DJI 常见约定），真机缺失 WPML 动作/POI/高级设置；断点续飞未实现（`flighttask_progress` 仅做进度状态回传）
 - DRC 已实现指令下发、四轴打包、序列号回执闭环（含延迟/超时状态）与前端摇杆面板；真机回包字段与延迟阈值需按固件联调核对
 - 校准项通过 `thing/product/{sn}/services` 的 `calibration` 方法下发；真机方法名/参数需按固件物模型核对。`services_reply` → `update_calibration()` 已自动绑定，但状态枚举按 DJI 常见约定映射，真机联调时需按实际固件回包字段核对

@@ -10,9 +10,11 @@ endpoints return 503 with an actionable message instead of crashing.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.deps import get_current_user_optional
@@ -251,6 +253,29 @@ async def mission_status(
     """Task state machines, preset routes and mission config."""
     conn = _connector(request)
     return conn.mission_status(drone_sn, task_id)
+
+
+@router.get("/mission/kmz")
+async def mission_kmz(
+    task_id: str,
+    request: Request,
+    user: User = Depends(get_current_user_optional),
+) -> Any:
+    """Download the generated WPML KMZ for a prepared mission."""
+    conn = _connector(request)
+    slots = conn.mission_status(task_id=task_id).get("missions") or []
+    if not slots:
+        raise HTTPException(status_code=404, detail=f"unknown task: {task_id}")
+    kmz = slots[0].get("kmz") or {}
+    path = str(kmz.get("path") or "")
+    if not path or not os.path.isfile(path):
+        raise HTTPException(
+            status_code=404, detail="KMZ not generated for this task")
+    return FileResponse(
+        path,
+        filename=kmz.get("filename") or f"{task_id}.kmz",
+        media_type="application/vnd.google-earth.kmz",
+    )
 
 
 @router.post("/mission/prepare")

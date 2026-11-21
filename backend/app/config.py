@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     dji_mission_routes: str = ""
     # Empty = use backend/config/dji_mqtt_tls.json
     dji_mqtt_tls_config: str = ""
+    # Empty = use backend/config/dji_wpml.json
+    dji_wpml_config: str = ""
 
     # --- MediaMTX (video streaming) --------------------------------------
     mediamtx_api_url: str = "http://mediamtx:9997"
