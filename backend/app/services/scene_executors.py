@@ -43,6 +43,37 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Config file (defaults + business rules). Env vars always win.
+# ---------------------------------------------------------------------------
+
+DEFAULT_SCENE_CONFIG_PATH = (
+    Path(__file__).resolve().parents[2] / "config" / "scene_3dgs.json"
+)
+_SCENE_CONFIG_CACHE: dict[str, dict] = {}
+
+
+def load_scene_config(path: Optional[str | Path] = None) -> dict:
+    """Load ``config/scene_3dgs.json``; env ``SKYMASTER_SCENE_CONFIG`` overrides path."""
+    resolved = Path(path or os.getenv("SKYMASTER_SCENE_CONFIG") or DEFAULT_SCENE_CONFIG_PATH)
+    key = str(resolved)
+    if key in _SCENE_CONFIG_CACHE:
+        return _SCENE_CONFIG_CACHE[key]
+    try:
+        cfg = json.loads(resolved.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        log.warning("scene config %s not found; using empty defaults", resolved)
+        cfg = {}
+    _SCENE_CONFIG_CACHE[key] = cfg
+    return cfg
+
+
+def _cfg_truthy(value: str) -> bool:
+    cfg = load_scene_config()
+    truthy = cfg.get("runtime", {}).get("truthy", ["1", "true", "yes", "on"])
+    return str(value).strip().lower() in truthy
+
+
+# ---------------------------------------------------------------------------
 # Command runner — subprocess boundary we can mock
 # ---------------------------------------------------------------------------
 
@@ -167,6 +198,27 @@ def _scene_workdir(cfg: ExecutorConfig, scene_id: UUID) -> Path:
     p = Path(cfg.scenes_workdir) / str(scene_id)
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _collect_artifacts(cfg: ExecutorConfig, workdir: Path) -> list[str]:
+    """Find produced model files after a successful training run.
+
+    Delegates to the config-driven collector; never raises (a failed scan
+    simply yields no artifacts and training still reports success).
+    """
+    try:
+        from app.services.scene_artifacts_service import collect_output_paths
+        scene_cfg = load_scene_config()
+        output_name = scene_cfg.get("commands", {}).get("gsplat", {}).get(
+            "output_dir", "gsplat_out"
+        )
+        search_root = workdir / output_name
+        if not search_root.exists():
+            search_root = workdir
+        return [str(p) for p in collect_output_paths(search_root, scene_cfg.get("artifacts"))]
+    except Exception:  # noqa: BLE001
+        log.warning("artifact scan failed in %s", workdir, exc_info=True)
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +472,7 @@ class GsplatExecutor(Executor):
             ok=True,
             n_gaussians=stats.get("n_gaussians"),
             psnr_train=stats.get("psnr"),
+            artifact_paths=_collect_artifacts(self.cfg, workdir),
         )
 
 
@@ -464,12 +517,14 @@ class Gsplat4DExecutor(Executor):
                 error=f"gsplat4d exit={r.exit_code}: {r.stderr[-800:]}",
             )
         stats = parse_gsplat4d_stats(r.stdout + "\n" + r.stderr)
+        workdir_4d = _scene_workdir(self.cfg, scene_id)
         return ExecResult(
             ok=True,
             n_gaussians=stats.get("n_gaussians"),
             psnr_train=stats.get("psnr"),
             n_frames=stats.get("n_frames") or self._n_frames,
             psnr_temporal=stats.get("psnr_temporal"),
+            artifact_paths=_collect_artifacts(self.cfg, workdir_4d),
         )
 
 
@@ -478,12 +533,40 @@ class Gsplat4DExecutor(Executor):
 # ---------------------------------------------------------------------------
 
 
-def make_default_executor() -> Executor:
-    """Read env and build the appropriate executor.
+def resolve_executor_mode() -> str:
+    """Single source of truth for executor selection.
 
-    SKYMASTER_EXECUTOR = noop | colmap | gsplat | gsplat4d (default noop for dev)
+    Priority (first set wins):
+      1. ``SKYMASTER_EXECUTOR`` — explicit mode (noop|colmap|gsplat|gsplat4d)
+      2. ``SKYMASTER_REAL_GS_EXECUTORS`` — legacy boolean; true → gsplat/4dgs
+      3. ``config/scene_3dgs.json`` executor.mode (default ``noop``)
+
+    This closes the bug where ``main.py`` read the legacy boolean while the
+    factory read ``SKYMASTER_EXECUTOR``, so production toggles never took
+    effect. Both env names now converge here.
     """
-    mode = os.getenv("SKYMASTER_EXECUTOR", "noop").lower()
+    cfg = load_scene_config().get("executor", {})
+    env_name = cfg.get("env", "SKYMASTER_EXECUTOR")
+    legacy_name = cfg.get("legacy_enable_env", "SKYMASTER_REAL_GS_EXECUTORS")
+    kind_name = cfg.get("kind_env", "SKYMASTER_SCENE_KIND_DEFAULT")
+    aliases = cfg.get("aliases", {"4dgs": "gsplat4d"})
+
+    explicit = os.getenv(env_name)
+    if explicit and explicit.strip():
+        mode = explicit.strip().lower()
+        return aliases.get(mode, mode)
+
+    legacy = os.getenv(legacy_name)
+    if legacy and _cfg_truthy(legacy):
+        kind = os.getenv(kind_name, cfg.get("default_scene_kind", "3dgs"))
+        return "gsplat4d" if str(kind).strip().lower() == "4dgs" else "gsplat"
+
+    return str(cfg.get("mode", "noop")).strip().lower()
+
+
+def make_default_executor() -> Executor:
+    """Build the executor selected by :func:`resolve_executor_mode`."""
+    mode = resolve_executor_mode()
     if mode == "colmap":
         return ColmapExecutor()
     if mode == "gsplat":
@@ -492,3 +575,4 @@ def make_default_executor() -> Executor:
         return Gsplat4DExecutor()
     from app.services.scene_pipeline import NoOpExecutor
     return NoOpExecutor()
+

@@ -1,0 +1,76 @@
+{
+  "version": "1.0.0",
+  "description": "3DGS/4DGS executor selection, command templates and training-artifact registration. Env vars override every runtime value; this file holds defaults and business rules only.",
+
+  "executor": {
+    "env": "SKYMASTER_EXECUTOR",
+    "legacy_enable_env": "SKYMASTER_REAL_GS_EXECUTORS",
+    "kind_env": "SKYMASTER_SCENE_KIND_DEFAULT",
+    "mode": "noop",
+    "modes": ["noop", "colmap", "gsplat", "gsplat4d", "4dgs"],
+    "aliases": {"4dgs": "gsplat4d"},
+    "default_scene_kind": "3dgs"
+  },
+
+  "runtime": {
+    "workdir_env": "SKYMASTER_SCENES_WORKDIR",
+    "workdir": "/tmp/skymaster-scenes",
+    "use_docker_env": "SKYMASTER_USE_DOCKER",
+    "use_docker": false,
+    "docker_images": {
+      "colmap": "colmap/colmap:latest",
+      "gsplat": "nerfstudio/nerfstudio:latest"
+    },
+    "docker_image_envs": {
+      "colmap": "SKYMASTER_COLMAP_IMAGE",
+      "gsplat": "SKYMASTER_GSPLAT_IMAGE"
+    },
+    "docker_gpus": "all",
+    "docker_workdir": "/work",
+    "timeouts_s": {
+      "colmap": 7200,
+      "gsplat": 14400
+    },
+    "timeout_envs": {
+      "colmap": "SKYMASTER_COLMAP_TIMEOUT",
+      "gsplat": "SKYMASTER_GSPLAT_TIMEOUT"
+    },
+    "recv_backoff": [1.0, 2.0],
+    "truthy": ["1", "true", "yes", "on"]
+  },
+
+  "commands": {
+    "colmap": {
+      "binary": "colmap",
+      "subcommand": "automatic_reconstructor",
+      "args": ["--sparse", "1", "--dense", "0"]
+    },
+    "gsplat": {
+      "binary": "ns-train",
+      "model": "splatfacto",
+      "args": ["--max-num-iterations", "30000"],
+      "output_dir": "gsplat_out"
+    },
+    "gsplat4d": {
+      "binary": "ns-train",
+      "model": "splatfacto-4d",
+      "args": ["--max-num-iterations", "40000"],
+      "output_dir": "gsplat4d_out",
+      "frame_arg": "--n-frames"
+    }
+  },
+
+  "artifacts": {
+    "auto_register": true,
+    "auto_register_env": "SKYMASTER_AUTO_REGISTER_ARTIFACTS",
+    "output_globs": ["**/*.ply", "**/*.splat"],
+    "kind_by_ext": {
+      "ply": "gsplat_ply",
+      "splat": "gsplat_ply"
+    },
+    "max_bytes": 4294967296,
+    "include_ckpt": false,
+    "ckpt_globs": ["**/*.ckpt", "**/*.safetensors"],
+    "ckpt_kind": "gsplat_ckpt"
+  }
+}

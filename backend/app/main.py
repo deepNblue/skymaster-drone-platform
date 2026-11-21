@@ -21,14 +21,14 @@ logger = logging.getLogger(__name__)
 
 
 def _real_gs_executors_enabled() -> bool:
-    """Enable real subprocess-based COLMAP/Gsplat executors (default: off).
+    """Deprecated shim — real-executor selection now lives in scene_executors.
 
-    Requires COLMAP + gsplat/nerfstudio installed in the execution environment.
-    When off (default), NoOpExecutor is used for dev/test.
+    Kept as a predicate for callers that only need a boolean; the actual
+    backend choice (colmap/gsplat/gsplat4d) is made by
+    :func:`scene_executors.resolve_executor_mode`.
     """
-    return os.getenv("SKYMASTER_REAL_GS_EXECUTORS", "false").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
+    from app.services.scene_executors import resolve_executor_mode
+    return resolve_executor_mode() != "noop"
 
 
 def _copilot_scheduler_enabled() -> bool:
@@ -188,19 +188,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         logger.info("RevokedToken cleanup task started (every 6h)")
 
-    # Initialize 3DGS/4DGS real executors (if enabled)
-    if _real_gs_executors_enabled():
-        from app.services import scene_pipeline
-        from app.services.scene_executors import GsplatExecutor, Gsplat4DExecutor
+    # Initialize 3DGS/4DGS executor via the single unified factory.
+    # SKYMASTER_EXECUTOR / SKYMASTER_REAL_GS_EXECUTORS / config file all
+    # converge on scene_executors.resolve_executor_mode().
+    from app.services import scene_pipeline
+    from app.services.scene_executors import make_default_executor, resolve_executor_mode
 
-        if os.getenv("SKYMASTER_SCENE_KIND_DEFAULT", "3dgs") == "4dgs":
-            scene_pipeline.set_executor(Gsplat4DExecutor())
-            logger.info("Using real 4DGS executor (Gsplat4D)")
-        else:
-            scene_pipeline.set_executor(GsplatExecutor())
-            logger.info("Using real 3DGS executor (COLMAP + Gsplat)")
-    else:
-        logger.info("Using NoOpExecutor for 3DGS (dev/test mode)")
+    active_mode = resolve_executor_mode()
+    scene_pipeline.set_executor(make_default_executor())
+    logger.info(
+        "3DGS executor initialized: mode=%s (%s)",
+        active_mode,
+        "real subprocess" if active_mode != "noop" else "dev/test noop",
+    )
 
     # T12.2: Copilot workflow scheduler background task.
     scheduler_task: asyncio.Task | None = None

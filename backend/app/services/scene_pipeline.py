@@ -164,6 +164,9 @@ class ExecResult:
     # v2.1 D2.1 · 4DGS extras. Populated only when scene_kind='4dgs'.
     n_frames: Optional[int] = None
     psnr_temporal: Optional[float] = None
+    # Absolute paths of produced model files (.ply/.splat). Executors fill
+    # this on success; the pipeline turns them into registered SceneAssets.
+    artifact_paths: Optional[list[str]] = None
 
 
 class Executor(ABC):
@@ -246,6 +249,23 @@ async def start_training(db: AsyncSession, scene: Scene) -> Scene:
         scene.n_frames = res.n_frames
     if getattr(res, "psnr_temporal", None) is not None and hasattr(scene, "psnr_temporal"):
         scene.psnr_temporal = res.psnr_temporal
+
+    # Import & register produced model files so they appear as downloadable
+    # artifacts. Non-fatal: registration errors never undo a successful run.
+    artifact_paths = getattr(res, "artifact_paths", None) or []
+    if artifact_paths:
+        try:
+            from app.services.scene_artifacts_service import register_produced_artifacts
+            reg = await register_produced_artifacts(db, scene, artifact_paths)
+            meta = dict(scene.meta or {})
+            meta["training_artifacts"] = reg.as_dict()
+            scene.meta = meta
+            log.info(
+                "scene %s artifacts: %d registered, %d skipped, %d errors",
+                scene.id, len(reg.registered), len(reg.skipped), len(reg.errors),
+            )
+        except Exception:  # noqa: BLE001 — training success is authoritative
+            log.warning("artifact registration failed for scene %s", scene.id, exc_info=True)
     return await transition(db, scene, "ready")
 
 
