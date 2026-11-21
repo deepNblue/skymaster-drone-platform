@@ -47,6 +47,7 @@ const menuItems = [
   { key: '/dashboard/calibration', icon: <ToolOutlined />, label: '校准中心' },
   { key: '/dashboard/mission', icon: <RocketOutlined />, label: 'DJI 任务' },
   { key: '/dashboard/preflight', icon: <SafetyCertificateOutlined />, label: '真机联调' },
+  { key: '/dashboard/scenarios/12309', icon: <SafetyOutlined />, label: '12309 防控' },
   {
     key: 'grp-flight',
     icon: <RocketOutlined />,

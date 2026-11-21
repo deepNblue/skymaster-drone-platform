@@ -1,0 +1,53 @@
+{
+  "_comment": "南宁 12309 检察服务中心无人机防控场景定义。所有范围、阈值、展示文案都在此文件，聚合服务与前端不硬编码。",
+  "id": "12309",
+  "name": "南宁 12309 检察服务中心无人机防控",
+  "short_name": "12309 防控",
+  "description": "围绕 12309 检察服务中心辖区，整合巡逻航线、机队态势、视觉告警、视频回传、飞行审批与取证归档，形成可汇报、可追溯的防控闭环。",
+  "region": {
+    "name": "广西南宁",
+    "bbox": [108.15, 22.55, 108.50, 22.95],
+    "center": {"lat": 22.8167, "lng": 108.3167},
+    "alt_limit_m": 150,
+    "note": "预设航线绕开核心禁飞区并控制在限高以内"
+  },
+  "owner": "南宁市检察机关 / 警务保障部门",
+  "scope": {
+    "route_id_prefix": "nanning-12309-",
+    "drone_label_contains": "12309",
+    "drone_sns": ["DJI-M300-01", "MOCKM300-01"],
+    "evidence_name_contains": ["12309", "南宁"]
+  },
+  "windows": {
+    "alerts_minutes": 1440,
+    "list_limit": 20,
+    "timeline_limit": 12
+  },
+  "severity_rules": [
+    {"min_confidence": 0.85, "level": "high", "label": "高危"},
+    {"min_confidence": 0.60, "level": "medium", "label": "关注"},
+    {"min_confidence": 0.00, "level": "low", "label": "一般"}
+  ],
+  "approval_status_map": {
+    "draft": "草稿",
+    "submitted": "已提交",
+    "pending_second_approval": "待二次审批",
+    "in_review": "审批中",
+    "under_review": "审批中",
+    "approved": "已批准",
+    "rejected": "已驳回",
+    "flown": "已飞行",
+    "archived": "已归档",
+    "cancelled": "已取消"
+  },
+  "approval_open_statuses": ["submitted", "pending_second_approval", "in_review", "under_review"],
+  "alert_open_statuses": ["new", "escalated"],
+  "kpis": [
+    {"key": "fleet_online", "label": "在岗无人机", "unit": "架"},
+    {"key": "active_missions", "label": "执行中任务", "unit": "项"},
+    {"key": "open_alerts", "label": "待处置告警", "unit": "条"},
+    {"key": "pending_approvals", "label": "审批中", "unit": "件"},
+    {"key": "live_streams", "label": "在线视频", "unit": "路"},
+    {"key": "evidence_count", "label": "取证归档", "unit": "份"}
+  ]
+}
