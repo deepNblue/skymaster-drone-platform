@@ -139,6 +139,64 @@ SkyMaster 已内置 UOM Adapter 的 Mock 模式：
 - Remote ID 上报通道
 - 30 个重点城市公安通道覆盖
 
+## 四·补、配置驱动 SDK 与上报状态机（已实现）
+
+`uom_client.py` 已重构成配置驱动的三模式 SDK，`uom_adapter.py` 上报状态机收敛到同一份配置。
+
+### 4A.1 配置与代码边界
+
+| 内容 | 位置 | 说明 |
+|---|---|---|
+| 空域库（禁飞区/限高区）、通用限高 | `backend/config/uom.json` → `mock.airspace` | 新增城市只改 JSON |
+| HTTP 端点、重试策略、签名 canonical | `backend/config/uom.json` → `paths` / `http` / `signature` | 真机字段差异只改配置 |
+| 审批策略（自动审批延迟、到期宽限、LLO 上限） | `backend/config/uom.json` → `report` | 含驳回原因的分桶关键词 |
+| AK/SK、base URL | **仅环境变量** | 绝不写入配置或日志 |
+
+`UOM_CONFIG` 可指向自定义配置文件，便于试点城市做差异化覆盖。
+
+### 4A.2 三种模式
+
+| 模式 | 开关 | transport | 适用场景 |
+|---|---|---|---|
+| `mock` | `UOM_MODE=mock`（默认） | `MockUomTransport` | 开发/演示/测试，内置确定性空域库 |
+| `live` | `UOM_MODE=live` | `HttpUomTransport` + `UOM_BASE_URL` | 拿到 UOM 正式授权后 |
+| `proxy` | `UOM_MODE=proxy` | `HttpUomTransport` + `UOM_PROXY_URL` | 试点城市内网 UOM 网关 |
+
+三种模式共用 `UomClient` facade 与同一份 pydantic/dataclass schema；切换只影响 transport。live/proxy 缺少凭据或 base URL 时抛 `UomConfigurationError`，不再静默坠入 `NotImplementedError`。
+
+- 签名：`HMAC-SHA256(METHOD|PATH|body_sha256|timestamp|nonce)`，header 名与 canonical 模板均由配置声明
+- 回调验签复用同一 canonical，时间偏移容忍由 `signature.max_skew_s` 控制
+- `HttpUomTransport` 支持注入 `httpx.Client`，测试用 `MockTransport` 可离线覆盖完整签名链路
+
+### 4A.3 上报状态机
+
+```
+DRAFT → PENDING → APPROVED → EXPIRED   (到期自动，宽限 expire_after_end_s)
+              └→ REJECTED   (人工/策略驳回)
+        └→ CANCELLED
+```
+
+`EXPIRED` 原先只是枚举里的死状态，现由后台循环与实时起飞校验共同推进，幂等且重启后可重放。
+
+### 4A.4 相关 API
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/api/v1/uom/status` | 模式/凭据就绪状态（脱敏，源自配置） |
+| GET | `/api/v1/uom/states` | 状态机库存与各状态计数 |
+| POST | `/api/v1/uom/reports/expire` | 手动触发到期迁移（演示/重启对账） |
+
+其余 `pilots` / `aircrafts` / `airspace/check` / `flight-plans` / `reports` 端点保持不变。
+
+### 4A.5 授权到位后的切换步骤
+
+1. 在部署环境设置 `UOM_MODE=live`、`UOM_BASE_URL`、`UOM_AK`、`UOM_SK`
+2. 按真机回包调整 `config/uom.json` 的 `paths`、`status_map`、`signature.canonical`
+3. 用 `UOM_PROXY_URL` 走试点网关时可切 `proxy`，逻辑完全一致
+4. 跑 `pytest tests/test_uom_transport.py` 验证离线签名/映射链路
+
+> ⚠️ mock 空域数据仅供演示，不能替代真实合规判断。
+
 ## 五、关键联系人/渠道
 
 | 渠道 | 信息 |

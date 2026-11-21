@@ -1,0 +1,119 @@
+{
+  "version": "1.0",
+  "description": "UOM (民航局无人机综合监管平台) 传输与合规策略。所有参数集中于此，代码零硬编码；敏感凭据只写环境变量名，不写明文。",
+  "mode": {
+    "default": "mock",
+    "env": "UOM_MODE",
+    "allowed": ["mock", "live", "proxy"]
+  },
+  "config_path_env": "UOM_CONFIG",
+  "http": {
+    "timeout_s": 10.0,
+    "max_retries": 2,
+    "retry_backoff_s": 0.5,
+    "retry_on_status": [429, 500, 502, 503, 504],
+    "verify_tls": true,
+    "base_url_env": {
+      "live": "UOM_BASE_URL",
+      "proxy": "UOM_PROXY_URL"
+    },
+    "fallback_base_url": {
+      "live": "",
+      "proxy": ""
+    }
+  },
+  "auth": {
+    "ak_env": "UOM_AK",
+    "sk_env": "UOM_SK",
+    "header_names": {
+      "ak": "X-UOM-AK",
+      "timestamp": "X-UOM-Timestamp",
+      "nonce": "X-UOM-Nonce",
+      "signature": "X-UOM-Signature",
+      "body_hash": "X-UOM-BodyHash"
+    }
+  },
+  "signature": {
+    "algorithm": "HMAC-SHA256",
+    "canonical": "{method}|{path}|{body_sha256}|{timestamp}|{nonce}",
+    "max_skew_s": 60
+  },
+  "paths": {
+    "register_pilot": "/uom/v1/pilots",
+    "register_aircraft": "/uom/v1/aircrafts",
+    "check_airspace": "/uom/v1/airspace/check",
+    "submit_plan": "/uom/v1/flight-plans",
+    "get_plan": "/uom/v1/flight-plans/{ref}"
+  },
+  "status_map": {
+    "accepted": ["accepted", "APPROVED", "APPROVAL_PASSED", "1"],
+    "rejected": ["rejected", "REJECTED", "APPROVAL_REFUSED", "0"],
+    "pending": ["pending", "PENDING", "UNDER_REVIEW", "2"]
+  },
+  "mock": {
+    "ref_prefix": "UOM",
+    "pilot_ref_prefix": "UP",
+    "aircraft_ref_prefix": "UA",
+    "airspace": {
+      "general_ceiling_m": 120.0,
+      "general_reference": "民用无人驾驶航空器飞行管理暂行条例 §16",
+      "no_fly_zones": [
+        {
+          "name": "天府国际机场净空区",
+          "lat": 30.312,
+          "lng": 104.442,
+          "radius_m": 15000,
+          "doc_ref": "民航西南管理局 [2020] 12 号"
+        },
+        {
+          "name": "成都双流机场净空区",
+          "lat": 30.578,
+          "lng": 103.947,
+          "radius_m": 15000,
+          "doc_ref": "民航西南管理局 [2018] 03 号"
+        },
+        {
+          "name": "成都市区管控区",
+          "lat": 30.652,
+          "lng": 104.076,
+          "radius_m": 3000,
+          "doc_ref": "成都市公安局 [2023] 45 号"
+        },
+        {
+          "name": "北京六环管控区",
+          "lat": 39.906,
+          "lng": 116.397,
+          "radius_m": 30000,
+          "doc_ref": "民航华北管理局 [2019] 08 号"
+        }
+      ],
+      "ceiling_limited_zones": [
+        {
+          "name": "龙泉山限高区",
+          "lat": 30.552,
+          "lng": 104.283,
+          "radius_m": 8000,
+          "ceiling_m": 120.0,
+          "doc_ref": "四川省空管办 [2022] 07 号"
+        }
+      ]
+    }
+  },
+  "report": {
+    "max_alt_m": 500.0,
+    "min_polygon_points": 3,
+    "auto_approve": true,
+    "approval_delay_s": 3.0,
+    "expire_after_end_s": 3600,
+    "auto_expire_interval_s": 1.0,
+    "reviewer": "auto-uom",
+    "approval_code_prefix": "UOM",
+    "reject_reason_buckets": [
+      {"bucket": "geofence", "keywords": ["geofence", "no_fly", "no-fly", "禁飞"]},
+      {"bucket": "altitude", "keywords": ["altitude", "height", "限高"]},
+      {"bucket": "license", "keywords": ["certificate", "license", "证"]},
+      {"bucket": "weather", "keywords": ["weather", "wind", "天气"]},
+      {"bucket": "airspace_conflict", "keywords": ["conflict", "overlap"]}
+    ]
+  }
+}

@@ -23,7 +23,7 @@ from app.deps import get_current_user
 from app.models.user import User
 from app.services.uom_client import (
     AircraftInfo, AirspaceQuery, AirspaceVerdict, FlightPlan, PilotInfo,
-    UomClient, get_mode, hash_id_card,
+    UomClient, config_status, hash_id_card,
 )
 
 router = APIRouter(prefix="/uom", tags=["uom"])
@@ -108,14 +108,8 @@ class UomAckOut(BaseModel):
 
 @router.get("/status")
 async def uom_status(user: User = Depends(get_current_user)) -> dict:
-    return {
-        "mode": get_mode(),
-        "authorized": False if get_mode() == "mock" else True,
-        "note": (
-            "UOM live 授权申请周期 6-12 周；当前 mock 模式下的空域数据"
-            "为演示用途，不能替代真实合规判断。"
-        ),
-    }
+    """Mode + credential readiness, derived from config (never leaks secrets)."""
+    return config_status()
 
 
 @router.post("/pilots")
@@ -387,6 +381,51 @@ async def cancel_report(rid: str) -> dict:
     except ValueError as e:
         raise HTTPException(409, str(e))
     return _report_to_dict(r)
+
+
+@router.post("/reports/expire")
+async def expire_reports() -> dict:
+    """Transition APPROVED reports past validity into EXPIRED.
+
+    Idempotent and safe to call repeatedly. The adapter also runs this on a
+    timer and before real-time takeoff checks; this endpoint exists for demos
+    and manual reconciliation after a restart.
+    """
+    from app.services.uom_adapter import ReportStatus
+
+    changed = await _adapter().expire_stale()
+    all_reports = await _adapter().list_all()
+    counts = {
+        state.value: sum(1 for r in all_reports if r.status == state)
+        for state in ReportStatus
+    }
+    return {
+        "expired_count": len(changed),
+        "expired_ids": [r.id for r in changed],
+        "counts": counts,
+    }
+
+
+@router.get("/states")
+async def uom_states() -> dict:
+    """State-machine inventory — useful for compliance dashboards."""
+    from app.services.uom_adapter import ReportStatus
+
+    all_reports = await _adapter().list_all()
+    return {
+        "states": [s.value for s in ReportStatus],
+        "counts": {
+            s.value: sum(1 for r in all_reports if r.status == s)
+            for s in ReportStatus
+        },
+        "total": len(all_reports),
+        "config": {
+            "expire_after_end_s": _adapter().expire_after_end_s,
+            "approval_delay_s": _adapter().approval_delay_s,
+            "auto_approve": _adapter().auto_approve,
+            "max_alt_m": _adapter().max_alt_m,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

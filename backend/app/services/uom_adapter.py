@@ -79,15 +79,37 @@ class UOMAdapter:
     def __init__(
         self,
         db_path: Optional[str | Path] = None,
-        auto_approve: bool = True,
-        approval_delay_s: float = 3.0,
+        auto_approve: Optional[bool] = None,
+        approval_delay_s: Optional[float] = None,
+        config: Optional[dict] = None,
     ) -> None:
+        from app.services.uom_client import load_uom_config
+
+        self.config = config or load_uom_config()
+        report_cfg = self.config.get("report", {})
         self.db_path = Path(db_path) if db_path else (
             Path(__file__).resolve().parents[2] / "data" / "uom.db"
         )
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.auto_approve = auto_approve
-        self.approval_delay_s = approval_delay_s
+        self.auto_approve = (
+            auto_approve if auto_approve is not None
+            else bool(report_cfg.get("auto_approve", True))
+        )
+        self.approval_delay_s = (
+            approval_delay_s if approval_delay_s is not None
+            else float(report_cfg.get("approval_delay_s", 3.0))
+        )
+        self.max_alt_m = float(report_cfg.get("max_alt_m", 500.0))
+        self.min_polygon_points = int(report_cfg.get("min_polygon_points", 3))
+        self.expire_after_end_s = float(report_cfg.get("expire_after_end_s", 3600))
+        self.auto_expire_interval_s = float(
+            report_cfg.get("auto_expire_interval_s", 1.0)
+        )
+        self.reviewer = str(report_cfg.get("reviewer", "auto-uom"))
+        self.approval_code_prefix = str(
+            report_cfg.get("approval_code_prefix", "UOM")
+        )
+        self.reject_reason_buckets = report_cfg.get("reject_reason_buckets", [])
         self._reports: dict[str, FlightReport] = {}
         self._conn: Optional[sqlite3.Connection] = None
         self._lock = asyncio.Lock()
@@ -156,10 +178,12 @@ class UOMAdapter:
     ) -> FlightReport:
         if end_ts <= start_ts:
             raise ValueError("end_ts must be after start_ts")
-        if max_alt_m <= 0 or max_alt_m > 500:
-            raise ValueError("max_alt_m must be in (0, 500]")
-        if len(area_polygon) < 3:
-            raise ValueError("area_polygon needs ≥3 points")
+        if max_alt_m <= 0 or max_alt_m > self.max_alt_m:
+            raise ValueError(f"max_alt_m must be in (0, {self.max_alt_m:g}]")
+        if len(area_polygon) < self.min_polygon_points:
+            raise ValueError(
+                f"area_polygon needs ≥{self.min_polygon_points} points"
+            )
 
         report = FlightReport(
             id=str(uuid.uuid4()),
@@ -190,7 +214,10 @@ class UOMAdapter:
             r.status = ReportStatus.APPROVED
             r.reviewed_at = time.time()
             r.reviewer = reviewer
-            r.approval_code = f"UOM-{int(r.submitted_at or 0)}-{report_id[:8]}"
+            r.approval_code = (
+                f"{self.approval_code_prefix}-"
+                f"{int(r.submitted_at or 0)}-{report_id[:8]}"
+            )
             self._persist(r)
         logger.info("UOM approved → %s by %s", report_id, reviewer)
         try:
@@ -218,21 +245,15 @@ class UOMAdapter:
         try:
             from app.services.metrics import UOM_REPORTS, UOM_REJECTIONS
             UOM_REPORTS.inc(status="rejected")
-            # Categorize reason to a bounded label to prevent cardinality
-            # explosion; free-text goes into audit logs, not Prometheus.
+            # Categorize reason to a bounded label (config-driven) to prevent
+            # cardinality explosion; free-text stays in audit logs only.
             reason_lower = (reason or "").lower()
-            if "geofence" in reason_lower or "no_fly" in reason_lower or "no-fly" in reason_lower:
-                bucket = "geofence"
-            elif "altitude" in reason_lower or "height" in reason_lower or "限高" in reason_lower:
-                bucket = "altitude"
-            elif "certificate" in reason_lower or "license" in reason_lower or "证" in reason_lower:
-                bucket = "license"
-            elif "weather" in reason_lower or "wind" in reason_lower or "天气" in reason_lower:
-                bucket = "weather"
-            elif "conflict" in reason_lower or "overlap" in reason_lower:
-                bucket = "airspace_conflict"
-            else:
-                bucket = "other"
+            bucket = "other"
+            for rule in self.reject_reason_buckets:
+                if any(str(kw).lower() in reason_lower
+                       for kw in rule.get("keywords", [])):
+                    bucket = str(rule.get("bucket", "other"))
+                    break
             UOM_REJECTIONS.inc(reason=bucket)
         except Exception:  # noqa: BLE001
             pass
@@ -248,6 +269,28 @@ class UOMAdapter:
             r.status = ReportStatus.CANCELLED
             self._persist(r)
         return r
+
+    async def expire_stale(
+        self, now_ts: Optional[float] = None,
+    ) -> list[FlightReport]:
+        """Mark APPROVED reports past validity as EXPIRED (configurable grace).
+
+        This closes the state-machine gap where ``EXPIRED`` was declared but
+        never reached. Idempotent: only transitions APPROVED → EXPIRED.
+        """
+        now = now_ts if now_ts is not None else time.time()
+        cutoff = now - self.expire_after_end_s
+        changed: list[FlightReport] = []
+        async with self._lock:
+            for r in self._reports.values():
+                if r.status == ReportStatus.APPROVED and r.end_ts <= cutoff:
+                    r.status = ReportStatus.EXPIRED
+                    r.reviewed_at = r.reviewed_at or now
+                    self._persist(r)
+                    changed.append(r)
+        if changed:
+            logger.info("UOM expired %d reports (cutoff=%.0f)", len(changed), cutoff)
+        return changed
 
     async def get(self, report_id: str) -> Optional[FlightReport]:
         return self._reports.get(report_id)
@@ -279,6 +322,10 @@ class UOMAdapter:
         Called from mission_dispatcher before a real dispatch — verifies
         an APPROVED report covers this mission's polygon + current time.
         """
+        # Only expire against real time: a simulated ``now_ts`` in the future
+        # must not mutate persisted state for unrelated tests/callers.
+        if now_ts is None:
+            await self.expire_stale()
         now = now_ts or time.time()
         for r in self._reports.values():
             if r.status != ReportStatus.APPROVED:
@@ -304,11 +351,13 @@ class UOMAdapter:
         self._conn.commit()
 
     async def _auto_approve_loop(self) -> None:
-        """Every second, auto-approve PENDING reports older than delay_s."""
+        """Periodically auto-approve stale PENDING and expire stale APPROVED."""
+        interval = max(0.1, min(1.0, self.auto_expire_interval_s))
         try:
             while not self._stop.is_set():
-                await asyncio.sleep(1.0)
-                cutoff = time.time() - self.approval_delay_s
+                await asyncio.sleep(interval)
+                now = time.time()
+                cutoff = now - self.approval_delay_s
                 to_approve = [
                     r.id for r in list(self._reports.values())
                     if r.status == ReportStatus.PENDING
@@ -316,9 +365,10 @@ class UOMAdapter:
                 ]
                 for rid in to_approve:
                     try:
-                        await self.approve(rid, reviewer="auto-uom-mock")
+                        await self.approve(rid, reviewer=self.reviewer)
                     except Exception:
                         logger.exception("auto-approve failed for %s", rid)
+                await self.expire_stale(now)
         except asyncio.CancelledError:
             pass
 
@@ -359,11 +409,21 @@ _adapter: Optional[UOMAdapter] = None
 def get_uom() -> UOMAdapter:
     global _adapter
     if _adapter is None:
+        from app.services.uom_client import load_uom_config
+
+        cfg = load_uom_config()
+        env_auto = os.getenv("UOM_AUTO_APPROVE")
+        auto_approve = (
+            env_auto.strip().lower() in ("1", "true", "yes")
+            if env_auto is not None else None
+        )
+        env_delay = os.getenv("UOM_APPROVAL_DELAY_S")
+        approval_delay_s = float(env_delay) if env_delay else None
         _adapter = UOMAdapter(
             db_path=os.getenv("UOM_DB"),
-            auto_approve=os.getenv("UOM_AUTO_APPROVE", "true").lower()
-            in ("1", "true", "yes"),
-            approval_delay_s=float(os.getenv("UOM_APPROVAL_DELAY_S", "3")),
+            auto_approve=auto_approve,
+            approval_delay_s=approval_delay_s,
+            config=cfg,
         )
     return _adapter
 
