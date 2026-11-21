@@ -54,6 +54,17 @@ type DjiStatus = {
   };
   states: Record<string, string>;
   reconnect_attempt: number;
+  tls?: {
+    enabled: boolean;
+    active: boolean;
+    port: number;
+    ports: number[];
+    client_auth: string;
+    client_cert_configured: boolean;
+    ca_configured: boolean;
+    tls_version: string;
+    insecure_skip_verify: boolean;
+  };
 };
 
 // ---- 单个摇杆组件 ----------------------------------------------------------
@@ -246,6 +257,20 @@ export default function DjiControlPage() {
                 {status.mode === 'mock' ? 'MOCK 仿真' : status.connected ? 'MQTT 已连接' : '重连中'}
               </Tag>
             ) : <Tag color="red">服务不可用</Tag>}
+            {status?.tls && (
+              <Tooltip title={
+                `TLS 版本 ${status.tls.tls_version || '默认'} · 双向认证 ${status.tls.client_auth} · ` +
+                `客户端证书 ${status.tls.client_cert_configured ? '已配置' : '未配置'}` +
+                `${status.tls.insecure_skip_verify ? ' · 跳过校验（仅联调）' : ''}`
+              }>
+                <span>
+                  <Tag color={status.tls.active ? 'cyan' : 'default'}>
+                    <SafetyCertificateOutlined />{' '}
+                    {status.tls.active ? `TLS ${status.tls.port}` : `明文 ${status.tls.port}`}
+                  </Tag>
+                </span>
+              </Tooltip>
+            )}
             <Tooltip title="刷新状态"><Button icon={<ReloadOutlined />} onClick={fetchStatus} size="small" /></Tooltip>
           </div>
         </div>

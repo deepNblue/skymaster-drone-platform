@@ -32,8 +32,9 @@ cd backend
 .venv/bin/python -m pytest tests/test_dji_drc_ack.py tests/test_dji_cloud_connector.py \
   tests/test_dji_calibration.py tests/test_dji_calibration_reply.py \
   tests/test_dji_mission.py tests/test_dji_mission_api.py \
-  tests/test_dji_api.py tests/test_dji_calibration_api.py -q
-# 83 passed（含 DRC 回执、校准状态机与 reply、飞行任务状态机、RC 死区映射、API 边界校验）
+  tests/test_dji_mqtt_tls.py tests/test_dji_api.py \
+  tests/test_dji_calibration_api.py -q
+# 95 passed（含 DRC 回执、校准 reply、任务状态机、MQTT TLS/clientAuth、API 边界校验）
 ```
 
 ## 真机启用步骤（硬件到位后）
@@ -60,15 +61,24 @@ cd backend
    export DJI_PASSWORD=<MQTT密码>
    ```
 
-4. **WPML 航线文件**：`flighttask_prepare()` 当前把 waypoint 列表放在 `data.waypoints`（骨架用）。真机需替换为符合 DJI WPML 规范的 KMZ 文件引用，见 DJI Cloud API 文档「航线管理」。
+4. **TLS / 客户端证书**：cloud 模式按端口自动启用 TLS（默认 8883/443；1883 明文保持不变）。参数在 `backend/config/dji_mqtt_tls.json`：
+   ```json
+   {"tls": {"enabled": true, "ports": [8883, 443],
+            "ca_certs": "/path/to/ca.pem", "client_auth": "required",
+            "certfile": "/path/to/client.crt", "keyfile": "/path/to/client.key",
+            "tls_version": "TLSv1_2"}}
+   ```
+   `client_auth` 取 `none` / `optional` / `required`；路径可写入配置或用 `DJI_MQTT_TLS_CONFIG` 指向自定义 JSON，凭据本身仍走环境变量。联调自查可临时把 `insecure_skip_verify` 设为 `true`（跳过服务端证书校验，**仅限联调**）。`GET /dji/status` 的 `tls` 字段可核对是否生效。
 
-5. **无人机记录**：真机 SN 写进 Drone 的 `metadata.dji_device_sn`，`protocol="dji"`。启动栈会自动配对，无需改代码。示例：
+5. **WPML 航线文件**：`flighttask_prepare()` 当前把 waypoint 列表放在 `data.waypoints`（骨架用）。真机需替换为符合 DJI WPML 规范的 KMZ 文件引用，见 DJI Cloud API 文档「航线管理」。
+
+6. **无人机记录**：真机 SN 写进 Drone 的 `metadata.dji_device_sn`，`protocol="dji"`。启动栈会自动配对，无需改代码。示例：
    ```bash
    curl -X POST localhost:8000/api/v1/drones -H 'Content-Type: application/json' \
      -d '{"sn":"DJI-M30-01","protocol":"dji","metadata":{"dji_device_sn":"<真机SN>","dji_gateway_sn":"<你的机场SN>"}}'
    ```
 
-6. **验证顺序**：拓扑上报 → OSD 遥测入库 → 下发一条准备+执行航线 → 直播推流到 MediaMTX → 返航。
+7. **验证顺序**：拓扑上报 → OSD 遥测入库 → 下发一条准备+执行航线 → 直播推流到 MediaMTX → 返航。
 
 ## DRC 实时控制用法
 
@@ -76,7 +86,7 @@ cd backend
 
 | 端点 | 说明 |
 |---|---|
-| `GET /api/v1/dji/status` | 连接器状态 / 飞机列表 / last_drc / **drc_link（指令回执）** / 状态 / 重连次数 |
+| `GET /api/v1/dji/status` | 连接器状态 / 飞机列表 / last_drc / **drc_link（指令回执）** / **tls（MQTT 安全状态）** / 状态 / 重连次数 |
 | `POST /api/v1/dji/drc` | `{drone_sn, throttle, yaw, pitch, roll}` 四轴 [-1,1] |
 | `POST /api/v1/dji/action` | `{action: return_home\|hover\|live_start\|mission, drone_sn, ...}` |
 
@@ -150,7 +160,7 @@ connector.apply_rc_axis("MOCKM300-01", "throttle", 0.5)
 
 ## 已知限制
 
-- `mode="cloud"` 尚未做 MQTT TLS/clientAuth 配置（真机 8883 端口需要）
+- `mode="cloud"` 已支持 TLS/clientAuth（按端口自动启用，参数在 `dji_mqtt_tls.json`）；真机证书链、TLS 版本与 MQTT 用户名密码需按 DJI 开发者平台实际下发值核对
 - OSD→canonical 映射覆盖主要字段，云台/负载/告警字段待按需扩展
 - 航线仍是 waypoint 列表骨架，非 WPML KMZ；断点续飞未实现（`flighttask_progress` 已用于进度状态回传，不等于断点续飞）
 - DRC 已实现指令下发、四轴打包、序列号回执闭环（含延迟/超时状态）与前端摇杆面板；真机回包字段与延迟阈值需按固件联调核对

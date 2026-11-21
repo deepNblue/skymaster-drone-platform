@@ -43,6 +43,7 @@ import json
 import logging
 import math
 import os
+import ssl
 from pathlib import Path
 import time
 import uuid
@@ -87,6 +88,7 @@ DEFAULT_RC_CALIBRATION_FILE = _BACKEND_ROOT / "data" / "dji_rc_calibration.json"
 DEFAULT_CONTROL_CONFIG = _BACKEND_ROOT / "config" / "dji_control.json"
 DEFAULT_MISSION_CONFIG = _BACKEND_ROOT / "config" / "dji_mission.json"
 DEFAULT_MISSION_ROUTES = _BACKEND_ROOT / "config" / "dji_mission_routes.json"
+DEFAULT_TLS_CONFIG = _BACKEND_ROOT / "config" / "dji_mqtt_tls.json"
 
 # Canonical telemetry keys shared with MavlinkConnector._slot().
 _TELEMETRY_KEYS = (
@@ -202,6 +204,7 @@ class DJICloudConnector:
         control_config_path: Optional[str] = None,
         mission_config_path: Optional[str] = None,
         mission_routes_path: Optional[str] = None,
+        tls_config_path: Optional[str] = None,
     ) -> None:
         if mode not in ("mock", "cloud"):
             raise ValueError(f"invalid DJI connector mode: {mode!r}")
@@ -263,6 +266,11 @@ class DJICloudConnector:
         self._missions: Dict[str, Dict[str, Any]] = {}
         self._mission_by_sn: Dict[str, str] = {}
 
+        # --- MQTT TLS / clientAuth (config-driven, credentials from env) ---
+        self.tls_config: Dict[str, Any] = self._load_json_config(
+            tls_config_path, DEFAULT_TLS_CONFIG, "mqtt tls config")
+        self._tls_active = False
+
     # ---------------------------------------------------------------- topics
     def topic(self, template: str, sn: Optional[str] = None) -> str:
         return template.format(sn=sn or self.gateway_sn)
@@ -276,6 +284,110 @@ class DJICloudConnector:
             self.topic(TOPIC_EVENTS),
             self.topic(TOPIC_SERVICES_REPLY),
         ]
+
+    # ------------------------------------------------------------------ tls
+    def _tls_cfg(self) -> Dict[str, Any]:
+        return self.tls_config.get("tls") or {}
+
+    @staticmethod
+    def _resolve_tls_version(name: str) -> Any:
+        """Resolve a config name to an ssl version accepted by paho.
+
+        ``ssl.TLSVersion.TLSv1_2`` and ``ssl.PROTOCOL_TLSv1_2`` use mixed
+        case, so match case-insensitively instead of uppercasing the key.
+        """
+        key = str(name).strip().replace("-", "_").lower()
+        if not key:
+            return None
+        enum = getattr(ssl, "TLSVersion", None)
+        if enum is not None:
+            for member in dir(enum):
+                if member.lower() == key:
+                    return getattr(enum, member)
+        for attr in dir(ssl):
+            if attr.lower() == "protocol_" + key:
+                return getattr(ssl, attr)
+        return None
+
+    def tls_status(self) -> Dict[str, Any]:
+        """Non-sensitive TLS status for the status endpoint / UI."""
+        cfg = self._tls_cfg()
+        raw_ports = cfg.get("ports")
+        ports = raw_ports if isinstance(raw_ports, list) else []
+        auth = str(cfg.get("client_auth") or "none").lower()
+        certfile = str(cfg.get("certfile") or "")
+        keyfile = str(cfg.get("keyfile") or "")
+        ca = str(cfg.get("ca_certs") or "")
+        return {
+            "enabled": bool(cfg.get("enabled", True)),
+            "active": self._tls_active,
+            "port": self.broker_port,
+            "ports": ports,
+            "ca_configured": bool(ca),
+            "client_cert_configured": bool(certfile and keyfile),
+            "client_auth": auth,
+            "tls_version": str(cfg.get("tls_version") or ""),
+            "insecure_skip_verify": bool(cfg.get("insecure_skip_verify", False)),
+        }
+
+    def _configure_tls(self, client: Any) -> bool:
+        """Apply CA / mutual-auth settings before the MQTT TCP connect.
+
+        TLS is only applied on configured TLS ports (default 8883/443), so a
+        local plaintext broker on 1883 keeps working unchanged.
+        """
+        cfg = self._tls_cfg()
+        if not bool(cfg.get("enabled", True)):
+            return False
+        ports = cfg.get("ports")
+        if not isinstance(ports, list) or not ports:
+            ports = [8883]
+        if self.broker_port not in ports:
+            return False
+        if not hasattr(client, "tls_set"):
+            logger.warning("MQTT client has no tls_set(); TLS not applied")
+            return False
+
+        kwargs: Dict[str, Any] = {}
+        ca = str(cfg.get("ca_certs") or "")
+        if ca:
+            kwargs["ca_certs"] = ca
+
+        auth = str(cfg.get("client_auth") or "none").lower()
+        if auth in ("optional", "required", "mutual"):
+            cert = str(cfg.get("certfile") or "")
+            key = str(cfg.get("keyfile") or "")
+            if cert and key:
+                kwargs["certfile"] = cert
+                kwargs["keyfile"] = key
+            else:
+                logger.warning(
+                    "client_auth=%s but certfile/keyfile missing; "
+                    "mutual TLS disabled", auth)
+
+        version_name = str(cfg.get("tls_version") or "")
+        if version_name:
+            version = self._resolve_tls_version(version_name)
+            if version is None:
+                logger.warning("unknown tls_version %r; using paho default", version_name)
+            else:
+                kwargs["tls_version"] = version
+        ciphers = str(cfg.get("ciphers") or "")
+        if ciphers:
+            kwargs["ciphers"] = ciphers
+
+        insecure = bool(cfg.get("insecure_skip_verify", False))
+        if insecure:
+            kwargs["cert_reqs"] = ssl.CERT_NONE
+
+        client.tls_set(**kwargs)
+        if insecure and hasattr(client, "tls_insecure_set"):
+            client.tls_insecure_set(True)
+        logger.info(
+            "DJI MQTT TLS configured: port=%s auth=%s ca=%s client_cert=%s "
+            "insecure=%s", self.broker_port, auth, bool(ca),
+            "certfile" in kwargs, insecure)
+        return True
 
     # ---------------------------------------------------------------- conn
     def connect(self) -> Any:
@@ -302,6 +414,7 @@ class DJICloudConnector:
             return self
 
         client = mqtt.Client(client_id=self.client_id, clean_session=True)
+        self._tls_active = self._configure_tls(client)
         if self.username:
             client.username_pw_set(self.username, self.password or "")
         client.on_connect = self._on_mqtt_connect

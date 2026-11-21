@@ -96,6 +96,7 @@ async def dji_status(
         "last_drc": getattr(conn, "last_drc", {}),
         "drc_link": (conn.drc_link_status()
                      if hasattr(conn, "drc_link_status") else {}),
+        "tls": (conn.tls_status() if hasattr(conn, "tls_status") else {}),
         "states": getattr(conn, "_mock_state", {}),
         "reconnect_attempt": getattr(conn, "_reconnect_attempt", 0),
     }

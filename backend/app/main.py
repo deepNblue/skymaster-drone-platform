@@ -146,6 +146,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                         settings, "dji_mission_config", "") or None,
                     mission_routes_path=getattr(
                         settings, "dji_mission_routes", "") or None,
+                    tls_config_path=getattr(
+                        settings, "dji_mqtt_tls_config", "") or None,
                 )
                 try:
                     _dji.connect()
