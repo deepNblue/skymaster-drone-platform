@@ -32,9 +32,10 @@ cd backend
 .venv/bin/python -m pytest tests/test_dji_drc_ack.py tests/test_dji_cloud_connector.py \
   tests/test_dji_calibration.py tests/test_dji_calibration_reply.py \
   tests/test_dji_mission.py tests/test_dji_mission_api.py \
-  tests/test_dji_mqtt_tls.py tests/test_dji_wpml.py tests/test_dji_api.py \
+  tests/test_dji_mqtt_tls.py tests/test_dji_wpml.py \
+  tests/test_dji_mission_breakpoint.py tests/test_dji_api.py \
   tests/test_dji_calibration_api.py -q
-# 104 passed（含 DRC 回执、校准 reply、任务状态机、MQTT TLS/clientAuth、WPML/KMZ、API 边界校验）
+# 112 passed（含 DRC 回执、校准 reply、任务状态机、断点续飞、MQTT TLS/clientAuth、WPML/KMZ、API 边界校验）
 ```
 
 ## 真机启用步骤（硬件到位后）
@@ -164,12 +165,20 @@ connector.apply_rc_axis("MOCKM300-01", "throttle", 0.5)
 
 前端任务卡片显示 KMZ 文件名、大小与 WPML 摘要，提供下载按钮（可上传至 DJI 平台）。生成物是骨架 XML，字段按 DJI 常见约定，真机联调需按固件物模型核对。
 
+**断点续飞**：参数在 `backend/config/dji_mission.json`（`breakpoint_fields`、`breakpoint_offset`、`resume_field`、`breakpoint_stale_s`）。暂停时按任务 `idx` 记录本地断点；设备 `flighttask_progress` 上报的航点索引按配置的字段名与偏移解析，断点只增不减并记录来源（local/device/manual）。`resume` 下发时携带 `resume_from_waypoint`（字段名可配）；`POST /dji/mission/resume-from` 可人工指定航点覆盖。任务状态与断点查询都透出 `breakpoint` / `breakpoint_source` / `breakpoint_at` / `resume_from`，前端任务卡片显示「断点 W{n}/{总}」徽标并把暂停按钮改为「从 W{n} 续飞」。
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/v1/dji/mission/breakpoint?task_id=&drone_sn=` | 断点、来源、时间戳与过期判断 |
+| `POST /api/v1/dji/mission/resume-from` | `{task_id, waypoint_index?}` 从记录断点或指定航点续飞 |
+
 前端页面提供航线卡片选择、航点表格、任务进度与操作日志；执行完成后显示「航线执行完成」。旧端点 `POST /dji/action` 的 `mission` 动作保留兼容，内部已改用真实 task_id（不再硬编码 `api-task`）。
 
 ## 已知限制
 
 - `mode="cloud"` 已支持 TLS/clientAuth（按端口自动启用，参数在 `dji_mqtt_tls.json`）；真机证书链、TLS 版本与 MQTT 用户名密码需按 DJI 开发者平台实际下发值核对
 - OSD→canonical 映射覆盖主要字段，云台/负载/告警字段待按需扩展
-- 已生成 WPML KMZ 骨架（字段按 DJI 常见约定），真机缺失 WPML 动作/POI/高级设置；断点续飞未实现（`flighttask_progress` 仅做进度状态回传）
+- 已生成 WPML KMZ 骨架（字段按 DJI 常见约定），真机缺失 WPML 动作/POI/高级设置
+- 已实现断点记录与续飞下发骨架；真机 `waypoint_index` 基准（0/1-based）、断点上报字段名与续飞参数名需按固件回包核对（`breakpoint_offset` / `breakpoint_fields` / `resume_field` 可配）
 - DRC 已实现指令下发、四轴打包、序列号回执闭环（含延迟/超时状态）与前端摇杆面板；真机回包字段与延迟阈值需按固件联调核对
 - 校准项通过 `thing/product/{sn}/services` 的 `calibration` 方法下发；真机方法名/参数需按固件物模型核对。`services_reply` → `update_calibration()` 已自动绑定，但状态枚举按 DJI 常见约定映射，真机联调时需按实际固件回包字段核对

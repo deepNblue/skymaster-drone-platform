@@ -48,6 +48,10 @@ type Mission = {
   state: string;
   progress: number;
   kmz?: KmzMeta;
+  breakpoint?: number;
+  breakpoint_source?: string;
+  breakpoint_at?: number;
+  resume_from?: number;
   message?: string;
   created_at: number;
   updated_at: number;
@@ -198,6 +202,24 @@ export default function MissionPage() {
       const detail = e?.response?.data?.detail || 'KMZ 下载失败';
       message.error(detail);
       log(detail, 'err');
+    }
+  };
+
+  const doResumeFrom = async (taskId: string, index?: number) => {
+    try {
+      setBusy(true);
+      const { data } = await api.post('/api/v1/dji/mission/resume-from', {
+        task_id: taskId,
+        ...(index !== undefined ? { waypoint_index: index } : {}),
+      });
+      log(`从航点 ${data.resume_from} 续飞 ${taskId.slice(0, 8)}`, 'ok');
+      message.success(`已从航点 ${data.resume_from} 续飞`);
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail || '断点续飞失败';
+      message.error(detail);
+      log(detail, 'err');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -367,6 +389,32 @@ export default function MissionPage() {
                       size="small"
                       strokeColor={m.state === 'failed' ? RED : m.state === 'success' ? GREEN : CYAN}
                     />
+                    {m.breakpoint !== undefined && (
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        margin: '6px 0', color: '#9fb3d1', fontSize: 11,
+                      }}>
+                        <Tag
+                          color={m.breakpoint_source === 'device' ? 'cyan'
+                            : m.breakpoint_source === 'manual' ? 'purple' : 'blue'}
+                          style={{ margin: 0 }}
+                        >
+                          断点 W{m.breakpoint}/{m.waypoints?.length || 0}
+                        </Tag>
+                        <span>
+                          {m.breakpoint_source === 'device' ? '设备回包'
+                            : m.breakpoint_source === 'manual' ? '手动指定' : '本地记录'}
+                        </span>
+                        {m.breakpoint_at && (
+                          <span style={{ color: '#7f96b8' }}>
+                            {new Date(m.breakpoint_at * 1000).toLocaleTimeString('zh-CN', { hour12: false })}
+                          </span>
+                        )}
+                        {m.resume_from !== undefined && (
+                          <span style={{ color: CYAN }}>已从 W{m.resume_from} 续飞</span>
+                        )}
+                      </div>
+                    )}
                     <div style={{ display: 'flex', gap: 12, color: '#7f96b8', fontSize: 11, marginBottom: 8 }}>
                       <span>航点 {m.idx || 0}/{m.waypoints?.length || 0}</span>
                       <span>flight {m.flight_id?.slice(0, 8)}</span>
@@ -413,8 +461,8 @@ export default function MissionPage() {
                       )}
                       {active && m.state === 'paused' && (
                         <Button size="small" type="primary" icon={<CaretRightOutlined />}
-                          loading={busy} onClick={() => doControl(m.task_id, 'resume')}>
-                          恢复
+                          loading={busy} onClick={() => doResumeFrom(m.task_id)}>
+                          {m.breakpoint !== undefined ? `从 W${m.breakpoint} 续飞` : '恢复'}
                         </Button>
                       )}
                       {m.state !== 'success' && m.state !== 'cancelled' && (

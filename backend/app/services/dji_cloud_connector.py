@@ -822,16 +822,33 @@ class DJICloudConnector:
     def flighttask_pause(self, task_id: str) -> bool:
         tid, slot = self._resolve_task(task_id)
         if tid:
+            self._record_breakpoint(tid, source="local")
             self._set_mission_state(tid, "paused", "任务已暂停")
         return self.publish_service(
             METHOD_TASK_PAUSE, self._task_data(task_id, slot))
 
-    def flighttask_resume(self, task_id: str) -> bool:
+    def flighttask_resume(
+        self, task_id: str, resume_from: Optional[int] = None,
+    ) -> bool:
         tid, slot = self._resolve_task(task_id)
-        if tid:
-            self._set_mission_state(tid, "running", "任务已恢复")
-        return self.publish_service(
-            METHOD_TASK_RESUME, self._task_data(task_id, slot))
+        if tid is None:
+            return self.publish_service(
+                METHOD_TASK_RESUME, self._task_data(task_id, slot))
+        bp = slot.get("breakpoint")
+        if resume_from is not None:
+            bp = max(0, int(resume_from))
+            slot["breakpoint"] = bp
+            slot["breakpoint_source"] = "manual"
+            slot["breakpoint_at"] = time.time()
+        if bp is None:
+            bp = self._record_breakpoint(tid, source="local")
+        slot["resume_from"] = int(bp or 0)
+        info = self._task_data(task_id, slot)
+        field = str(self._mission_cfg().get("resume_field")
+                    or "resume_from_waypoint")
+        info[field] = int(bp or 0)
+        self._set_mission_state(tid, "running", "任务已恢复")
+        return self.publish_service(METHOD_TASK_RESUME, info)
 
     def flighttask_cancel(self, task_id: str) -> bool:
         tid, slot = self._resolve_task(task_id)
@@ -1009,6 +1026,82 @@ class DJICloudConnector:
             return None
         return task_id
 
+    # ------------------------------------------------------------ breakpoint
+    def _record_breakpoint(
+        self, task_id: str, raw: Any = None, source: str = "local",
+    ) -> Optional[int]:
+        """Persist the last confirmed waypoint index for resume.
+
+        Device reports use the configured field names and offset; local
+        pauses use the task's own ``idx``. Values never move backwards.
+        """
+        slot = self._missions.get(task_id)
+        if slot is None:
+            return None
+        cfg = self._mission_cfg()
+        value: Optional[int] = None
+        if raw is not None:
+            try:
+                value = int(float(raw))
+            except (TypeError, ValueError):
+                value = None
+            if value is not None:
+                offset = int(cfg.get("breakpoint_offset", 0) or 0)
+                value = max(0, value - offset)
+        if value is None:
+            try:
+                value = int(slot.get("idx", 0) or 0)
+            except (TypeError, ValueError):
+                value = 0
+        current = slot.get("breakpoint")
+        if current is not None:
+            value = max(int(current), value)
+        total = len(slot.get("waypoints") or [])
+        if total > 0:
+            value = min(value, total)
+        slot["breakpoint"] = value
+        slot["breakpoint_source"] = source
+        slot["breakpoint_at"] = time.time()
+        slot["updated_at"] = time.time()
+        return value
+
+    def breakpoint_status(
+        self, task_id: Optional[str] = None, drone_sn: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Resume points with staleness, for UI and manual intervention."""
+        items: List[Dict[str, Any]] = []
+        cfg = self._mission_cfg()
+        stale_s = float(cfg.get("breakpoint_stale_s", 3600) or 3600)
+        now = time.time()
+        for slot in self._missions.values():
+            if task_id and slot.get("task_id") != task_id:
+                continue
+            if drone_sn and slot.get("drone_sn") != drone_sn:
+                continue
+            if "breakpoint" not in slot:
+                continue
+            at = float(slot.get("breakpoint_at") or 0)
+            items.append({
+                "task_id": slot.get("task_id"),
+                "drone_sn": slot.get("drone_sn"),
+                "state": slot.get("state"),
+                "breakpoint": slot["breakpoint"],
+                "waypoint_count": len(slot.get("waypoints") or []),
+                "source": slot.get("breakpoint_source"),
+                "breakpoint_at": at,
+                "stale": bool(at and now - at > stale_s),
+                "resume_from": slot.get("resume_from"),
+            })
+        items.sort(key=lambda x: x["breakpoint_at"], reverse=True)
+        return {
+            "breakpoints": items,
+            "config": {
+                "resume_field": str(cfg.get("resume_field")
+                                     or "resume_from_waypoint"),
+                "stale_s": stale_s,
+            },
+        }
+
     def mission_status(
         self, drone_sn: Optional[str] = None, task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -1078,6 +1171,9 @@ class DJICloudConnector:
         if tid is None:
             return
         state, progress, message = self._parse_mission_progress(data)
+        self._record_breakpoint(
+            tid, self._pick_field(data, cfg.get("breakpoint_fields") or []),
+            source="device")
         self._set_mission_state(tid, state, message, progress)
         logger.info("DJI mission progress: task=%s state=%s progress=%.1f%%",
                     tid, state, progress)

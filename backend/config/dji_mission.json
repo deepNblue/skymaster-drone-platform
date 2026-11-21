@@ -45,6 +45,12 @@
       "4": "failed",
       "5": "cancelled"
     },
-    "terminal_states": ["success", "failed", "cancelled"]
+    "terminal_states": ["success", "failed", "cancelled"],
+    "breakpoint_fields": [
+      "waypoint_index", "current_waypoint", "waypoint_idx", "wp_index", "idx"
+    ],
+    "breakpoint_offset": 0,
+    "resume_field": "resume_from_waypoint",
+    "breakpoint_stale_s": 3600
   }
 }

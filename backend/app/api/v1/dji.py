@@ -62,6 +62,11 @@ class MissionControlBody(BaseModel):
     action: str = Field(..., description="execute | pause | resume | cancel")
 
 
+class MissionResumeBody(BaseModel):
+    task_id: str
+    waypoint_index: Optional[int] = Field(None, ge=0)
+
+
 class RCAxisBody(BaseModel):
     min: float = Field(..., ge=-1.0, le=1.0)
     center: float = Field(..., ge=-1.0, le=1.0)
@@ -253,6 +258,37 @@ async def mission_status(
     """Task state machines, preset routes and mission config."""
     conn = _connector(request)
     return conn.mission_status(drone_sn, task_id)
+
+
+@router.get("/mission/breakpoint")
+async def mission_breakpoint(
+    request: Request,
+    task_id: Optional[str] = None,
+    drone_sn: Optional[str] = None,
+    user: User = Depends(get_current_user_optional),
+) -> Dict[str, Any]:
+    """Resume points with staleness for tasks that have been paused."""
+    conn = _connector(request)
+    return conn.breakpoint_status(task_id, drone_sn)
+
+
+@router.post("/mission/resume-from")
+async def mission_resume_from(
+    body: MissionResumeBody,
+    request: Request,
+    user: User = Depends(get_current_user_optional),
+) -> Dict[str, Any]:
+    """Resume a mission from its recorded breakpoint or a given waypoint."""
+    conn = _connector(request)
+    ok = conn.flighttask_resume(body.task_id, body.waypoint_index)
+    if not ok:
+        raise HTTPException(status_code=503, detail="resume command not sent")
+    items = conn.breakpoint_status(task_id=body.task_id).get("breakpoints") or []
+    return {
+        "ok": True,
+        "task_id": body.task_id,
+        "resume_from": items[0]["breakpoint"] if items else None,
+    }
 
 
 @router.get("/mission/kmz")
