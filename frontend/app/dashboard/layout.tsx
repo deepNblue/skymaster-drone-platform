@@ -108,6 +108,7 @@ const menuItems = [
     icon: <SafetyCertificateOutlined />,
     label: '安全合规',
     children: [
+      { key: '/dashboard/uom', label: 'UOM 上报' },
       { key: '/dashboard/crypto-sm2', label: 'SM2 签名' },
       { key: '/dashboard/audit-export', label: '审计导出' },
       { key: '/dashboard/ciio', label: 'CIIO 自评' },

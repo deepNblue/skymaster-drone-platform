@@ -959,6 +959,133 @@ export function uomReportsCsvUrl(opts?: {
   return `${baseURL}/api/v1/uom/reports.csv${q ? '?' + q : ''}`;
 }
 
+// ---- UOM (民航局无人机监管平台) 合规面板 --------------------------------
+
+export interface UomStatus {
+  mode: 'mock' | 'live' | 'proxy';
+  authorized: boolean;
+  config_version: string | null;
+  base_url_env: string;
+  base_url_set: boolean;
+  ak_env: string | null;
+  sk_env: string | null;
+  ak_set: boolean;
+  sk_set: boolean;
+  paths: Record<string, string>;
+  signature: { algorithm: string | null; max_skew_s: number | null };
+  note: string;
+}
+
+export interface UomStates {
+  states: string[];
+  counts: Record<string, number>;
+  total: number;
+  config: {
+    expire_after_end_s: number;
+    approval_delay_s: number;
+    auto_approve: boolean;
+    max_alt_m: number;
+  };
+}
+
+export interface UomReport {
+  id: string;
+  operator_id: string;
+  pilot_name: string;
+  aircraft_reg: string;
+  purpose: string;
+  area_polygon: number[][];
+  max_alt_m: number;
+  start_ts: number;
+  end_ts: number;
+  status: string;
+  submitted_at: number | null;
+  reviewed_at: number | null;
+  reviewer: string | null;
+  reject_reason: string | null;
+  approval_code: string | null;
+}
+
+export interface UomVerdict {
+  allowed: boolean;
+  zone_type: string;
+  ceiling_m: number | null;
+  reason: string;
+  references: string[];
+}
+
+export async function getUomStatus(): Promise<UomStatus> {
+  const { data } = await api.get('/api/v1/uom/status');
+  return data;
+}
+
+export async function getUomStates(): Promise<UomStates> {
+  const { data } = await api.get('/api/v1/uom/states');
+  return data;
+}
+
+export async function listUomReports(params?: {
+  status?: string;
+  operator_id?: string;
+}): Promise<{ reports: UomReport[]; count: number; scoped_by: string | null }> {
+  const { data } = await api.get('/api/v1/uom/reports', { params });
+  return data;
+}
+
+export async function createUomReport(body: {
+  operator_id: string;
+  pilot_name: string;
+  aircraft_reg: string;
+  purpose: string;
+  area_polygon: number[][];
+  max_alt_m: number;
+  start_ts: number;
+  end_ts: number;
+}): Promise<UomReport> {
+  const { data } = await api.post('/api/v1/uom/reports', body);
+  return data;
+}
+
+export async function approveUomReport(
+  id: string, reviewer = 'panel',
+): Promise<UomReport> {
+  const { data } = await api.post(`/api/v1/uom/reports/${id}/approve`, { reviewer });
+  return data;
+}
+
+export async function rejectUomReport(
+  id: string, reason: string, reviewer = 'panel',
+): Promise<UomReport> {
+  const { data } = await api.post(`/api/v1/uom/reports/${id}/reject`, {
+    reason, reviewer,
+  });
+  return data;
+}
+
+export async function cancelUomReport(id: string): Promise<UomReport> {
+  const { data } = await api.post(`/api/v1/uom/reports/${id}/cancel`);
+  return data;
+}
+
+export async function expireUomReports(): Promise<{
+  expired_count: number;
+  expired_ids: string[];
+  counts: Record<string, number>;
+}> {
+  const { data } = await api.post('/api/v1/uom/reports/expire');
+  return data;
+}
+
+export async function checkUomAirspace(body: {
+  lat: number;
+  lng: number;
+  altitude_m: number;
+  radius_m?: number;
+}): Promise<UomVerdict> {
+  const { data } = await api.post('/api/v1/uom/airspace/check', body);
+  return data;
+}
+
 /** T7.9 — Absolute URL for the flat approvals CSV export. */
 export function approvalsBatchCsvUrl(opts?: {
   status?: string;

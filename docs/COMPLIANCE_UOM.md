@@ -188,7 +188,20 @@ DRAFT → PENDING → APPROVED → EXPIRED   (到期自动，宽限 expire_after
 
 其余 `pilots` / `aircrafts` / `airspace/check` / `flight-plans` / `reports` 端点保持不变。
 
-### 4A.5 授权到位后的切换步骤
+### 4A.5 前端合规面板
+
+`/dashboard/uom`（导航：安全合规 → UOM 上报）把上述能力接到一个页面：
+
+| 区块 | 数据来源 | 说明 |
+|---|---|---|
+| 链路模式与凭据 | `GET /uom/status` | 模式、配置版本、签名算法、base URL/AK/SK 就绪状态；只显示环境变量名与是否配置，不回显明文 |
+| 上报状态机 | `GET /uom/states` | 状态枚举与计数**从后端读取**，页面不硬编码；附到期宽限/审批延迟/高度上限；「到期对账」触发 `POST /uom/reports/expire` |
+| 适飞空域快查 | `POST /uom/airspace/check` | 输入经纬度与高度，展示可飞判定、区域类型、限高与引用文件 |
+| 上报记录 | `GET/POST /uom/reports` + 审核端点 | 状态筛选、批准/驳回（填理由）/取消、CSV 导出；新建上报用 12309 预设区域与时间窗 |
+
+UI 沿用深色作战视图风格，与 `/dashboard/scenarios/12309` 一致；所有阈值、状态标签映射集中在前端页面常量，运行时数值全部来自配置。
+
+### 4A.6 授权到位后的切换步骤
 
 1. 在部署环境设置 `UOM_MODE=live`、`UOM_BASE_URL`、`UOM_AK`、`UOM_SK`
 2. 按真机回包调整 `config/uom.json` 的 `paths`、`status_map`、`signature.canonical`
