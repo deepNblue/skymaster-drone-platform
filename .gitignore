@@ -28,6 +28,10 @@ env/
 # Node
 node_modules/
 npm-debug.log*
+
+# frontend/lib is TypeScript source, not a Python lib/ directory
+!frontend/lib/
+!frontend/lib/*.ts
 yarn-debug.log*
 yarn-error.log*
 .npm
