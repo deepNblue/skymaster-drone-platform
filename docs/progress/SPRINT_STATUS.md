@@ -76,7 +76,7 @@ Route (app)                              Size     First Load JS
 
 ## 遗留 TODO
 - [ ] 用 Docker 起 postgres/redis/minio 做真集成测试
-- [ ] MAVLink 与 PX4 SITL 联调
+- [x] MAVLink 与 PX4 SITL 联调（双向 MAVLink v2 模拟器 + COMMAND_ACK + mission 握手；真 PX4 二进制待 Docker 集成）
 - [ ] LLM 火山引擎 API 真实调用（需 API key）
 - [ ] Cesium 首屏 3D 渲染人工目视验证（需浏览器）
 

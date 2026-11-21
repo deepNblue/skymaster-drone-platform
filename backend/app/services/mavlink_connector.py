@@ -10,10 +10,12 @@ SkyMaster v0.1 W3-W6 implementation per SDD §5:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 try:  # pymavlink is a runtime dep; keep import soft so tests can patch mavutil.
@@ -26,6 +28,34 @@ except ImportError:  # pragma: no cover — exercised only when dep is missing
     mavutil = _MavutilStub()  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_SITL_CONFIG = (
+    Path(__file__).resolve().parents[2] / "config" / "mavlink_sitl.json"
+)
+_SITL_CONFIG_CACHE: Optional[dict] = None
+
+
+def load_sitl_config(path: Optional[str] = None) -> dict:
+    """Load the shared MAVLink/SITL config (cached). ``MAVLINK_SITL_CONFIG``
+    overrides the path. Missing file degrades to empty dict so existing tests
+    and deployments without the config keep their documented defaults.
+    """
+    global _SITL_CONFIG_CACHE
+    cfg_path = path or os.getenv("MAVLINK_SITL_CONFIG") or str(DEFAULT_SITL_CONFIG)
+    if _SITL_CONFIG_CACHE is None or str(_SITL_CONFIG_CACHE.get("_path")) != str(cfg_path):
+        p = Path(cfg_path)
+        if p.is_file():
+            with p.open("r", encoding="utf-8") as fh:
+                _SITL_CONFIG_CACHE = json.load(fh)
+            _SITL_CONFIG_CACHE["_path"] = str(cfg_path)
+        else:
+            _SITL_CONFIG_CACHE = {"_path": str(cfg_path)}
+    return _SITL_CONFIG_CACHE
+
+
+def reset_sitl_config_cache() -> None:
+    global _SITL_CONFIG_CACHE
+    _SITL_CONFIG_CACHE = None
 
 
 # --- Scaling constants (MAVLink common message set) --------------------------
@@ -58,7 +88,10 @@ class MavlinkConnector:
         redis_client: Any = None,
         publish_interval_ms: int = 500,
         sysid_map: Optional[Dict[int, str]] = None,
+        config: Optional[dict] = None,
     ) -> None:
+        self.config = config if config is not None else load_sitl_config()
+        conn_cfg = self.config.get("connector", {})
         self.endpoint = endpoint
         self.redis = redis_client
         self.publish_interval = publish_interval_ms / 1000.0
@@ -67,6 +100,20 @@ class MavlinkConnector:
         self.sysid_map: Dict[int, str] = dict(sysid_map or {})
         # drone_id (system_id) -> rolling telemetry dict
         self.telemetry: Dict[int, Dict[str, Any]] = {}
+        # Command acknowledgements received from the vehicle (keyed by sysid).
+        # Populated in handle_message from COMMAND_ACK / MISSION_ACK frames;
+        # useful for verifying the bidirectional link without a real drone.
+        self.acks: list[Dict[str, Any]] = []
+        # Config-driven timing (defaults match historical hard-coded values so
+        # existing deployments and tests are unaffected).
+        self.recv_timeout_s = float(conn_cfg.get("recv_timeout_s", 1.0))
+        self.reconnect_backoff_start_s = float(
+            conn_cfg.get("reconnect_backoff_start_s", 1.0)
+        )
+        self.reconnect_backoff_max_s = float(
+            conn_cfg.get("reconnect_backoff_max_s", 30.0)
+        )
+        self.stream_maxlen = int(conn_cfg.get("stream_maxlen", 1000))
         self._conn: Any = None
         self._stop = asyncio.Event()
 
@@ -95,11 +142,14 @@ class MavlinkConnector:
         try:
             # Pad to 7 params.
             padded = list(params) + [0.0] * (7 - len(params))
+            conn_cfg = self.config.get("connector", {})
+            target_component = int(conn_cfg.get("command_target_component", 1))
+            confirmation = int(conn_cfg.get("command_confirmation", 0))
             self._conn.mav.command_long_send(
                 target_system,
-                0,                     # target_component (0 = broadcast)
+                target_component,
                 int(command),
-                0,                     # confirmation
+                confirmation,
                 *padded[:7],
             )
             logger.info(
@@ -110,6 +160,52 @@ class MavlinkConnector:
         except Exception:
             logger.exception("send_command failed")
             return False
+
+    def send_command_with_ack(
+        self,
+        target_system: int,
+        command: int,
+        params: tuple[float, ...] = (),
+        timeout_s: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Send COMMAND_LONG and block until the matching COMMAND_ACK.
+
+        This is the bidirectional counterpart to :meth:`send_command` and is
+        what makes a real MAVLink round-trip testable against a SITL simulator
+        (or a real PX4) without a HTTP side-channel.
+
+        Returns ``{ok, command, result, raw}``. On timeout ``ok=False`` and
+        ``result=None``; the ACK is still recorded in :attr:`acks` if received.
+        """
+        if not self.send_command(target_system, command, params):
+            return {"ok": False, "command": command, "result": None,
+                    "error": "send failed"}
+        conn_cfg = self.config.get("connector", {})
+        wait = float(timeout_s if timeout_s is not None
+                     else conn_cfg.get("command_ack_timeout_s", 2.0))
+        if self._conn is None:
+            return {"ok": False, "command": command, "result": None,
+                    "error": "connection not open"}
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline:
+            remaining = max(0.05, deadline - time.monotonic())
+            msg = self._conn.recv_match(
+                type="COMMAND_ACK", blocking=True, timeout=remaining
+            )
+            if msg is None:
+                break
+            src = msg.get_srcSystem() if hasattr(msg, "get_srcSystem") else 1
+            result = int(getattr(msg, "result", -1))
+            self.acks.append({
+                "kind": "COMMAND_ACK", "sysid": src,
+                "command": int(getattr(msg, "command", -1)), "result": result,
+                "ts": time.time(),
+            })
+            if src == target_system and int(getattr(msg, "command", -1)) == int(command):
+                return {"ok": result == 0, "command": command,
+                        "result": result, "raw": str(msg)}
+        return {"ok": False, "command": command, "result": None,
+                "error": "COMMAND_ACK timeout"}
 
     def send_mission_items(
         self,
@@ -195,6 +291,23 @@ class MavlinkConnector:
         mtype = msg.get_type()
         sysid = getattr(msg, "_header", None)
         sysid = msg.get_srcSystem() if hasattr(msg, "get_srcSystem") else 1
+
+        # Command acknowledgements are not telemetry; record them for the
+        # bidirectional link and return None (keep parser contract stable).
+        if mtype == "COMMAND_ACK":
+            self.acks.append({
+                "kind": "COMMAND_ACK", "sysid": sysid,
+                "command": int(getattr(msg, "command", -1)),
+                "result": int(getattr(msg, "result", -1)), "ts": time.time(),
+            })
+            return None
+        if mtype == "MISSION_ACK":
+            self.acks.append({
+                "kind": "MISSION_ACK", "sysid": sysid,
+                "type": int(getattr(msg, "type", -1)), "ts": time.time(),
+            })
+            return None
+
         slot = self._slot(sysid)
 
         if mtype == "HEARTBEAT":
@@ -264,7 +377,9 @@ class MavlinkConnector:
             channel = f"telemetry.broadcast.{drone_id}"
             payload = self._stream_payload(slot)
             try:
-                await self.redis.xadd(stream, payload, maxlen=1000, approximate=True)
+                await self.redis.xadd(
+                    stream, payload, maxlen=self.stream_maxlen, approximate=True
+                )
             except Exception:  # noqa: BLE001 — keep loop alive
                 logger.exception("Failed to XADD to %s", stream)
             try:
@@ -280,7 +395,9 @@ class MavlinkConnector:
         while not self._stop.is_set():
             msg = await loop.run_in_executor(
                 None,
-                lambda: self._conn.recv_match(blocking=True, timeout=1.0),
+                lambda: self._conn.recv_match(
+                    blocking=True, timeout=self.recv_timeout_s
+                ),
             )
             if msg is None:
                 continue
@@ -302,7 +419,7 @@ class MavlinkConnector:
 
         Reconnects on unexpected failures with exponential backoff.
         """
-        backoff = 1.0
+        backoff = self.reconnect_backoff_start_s
         while not self._stop.is_set():
             try:
                 self.connect()
@@ -318,7 +435,7 @@ class MavlinkConnector:
                     await asyncio.wait_for(self._stop.wait(), timeout=backoff)
                 except asyncio.TimeoutError:
                     pass
-                backoff = min(backoff * 2, 30.0)
+                backoff = min(backoff * 2, self.reconnect_backoff_max_s)
 
     def stop(self) -> None:
         logger.info("Stopping MAVLink connector")
@@ -343,11 +460,20 @@ async def _amain() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    endpoint = os.getenv("MAVLINK_ENDPOINT", "udpin:0.0.0.0:14550")
-    publish_ms = int(os.getenv("TELEMETRY_PUBLISH_MS", "500"))
+    cfg = load_sitl_config()
+    conn_cfg = cfg.get("connector", {})
+    endpoint_env = conn_cfg.get("endpoint_env", "MAVLINK_ENDPOINT")
+    publish_env = conn_cfg.get("publish_interval_ms_env", "TELEMETRY_PUBLISH_MS")
+    endpoint = os.getenv(
+        endpoint_env, conn_cfg.get("default_endpoint", "udpin:0.0.0.0:14550")
+    )
+    publish_ms = int(os.getenv(
+        publish_env, conn_cfg.get("default_publish_interval_ms", 500)
+    ))
 
     redis_client = _build_redis_client()
     connector = MavlinkConnector(
+        config=cfg,
         endpoint=endpoint,
         redis_client=redis_client,
         publish_interval_ms=publish_ms,

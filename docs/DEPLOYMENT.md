@@ -567,10 +567,10 @@ JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
 CORS_ORIGINS=https://skymaster.io,https://www.skymaster.io
 CORS_ALLOW_CREDENTIALS=true
 
-# ========== MAVLink配置 ==========
-MAVLINK_DEFAULT_BAUD_RATE=57600
-MAVLINK_TIMEOUT=5.0
-MAVLINK_HEARTBEAT_INTERVAL=1.0
+# ========== MAVLink配置（UDP 链路；完整参数见 backend/config/mavlink_sitl.json） ==========
+MAVLINK_ENDPOINT=udpin:0.0.0.0:14550
+MAVLINK20=1
+TELEMETRY_PUBLISH_MS=500
 
 # ========== 设备配置 ==========
 DEVICE_MAX_CONNECTIONS=100

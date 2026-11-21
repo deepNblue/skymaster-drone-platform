@@ -1,0 +1,96 @@
+{
+  "version": "1.0",
+  "description": "MAVLink / PX4 SITL 联调参数。所有端点、系统号、周期、超时集中于此；代码零硬编码。可用 MAVLINK_SITL_CONFIG 覆盖路径。",
+  "config_path_env": "MAVLINK_SITL_CONFIG",
+  "dialect": {
+    "name": "common",
+    "wire_protocol": "2.0",
+    "require_mavlink20_env": true,
+    "note": "pymavlink 只有设 MAVLINK20=1 才会加载 v20 dialect（COMMAND_ACK/MISSION_REQUEST_INT 等 v2 字段）。模拟器与连接器必须一致。"
+  },
+  "connector": {
+    "endpoint_env": "MAVLINK_ENDPOINT",
+    "default_endpoint": "udpin:0.0.0.0:14550",
+    "publish_interval_ms_env": "TELEMETRY_PUBLISH_MS",
+    "default_publish_interval_ms": 500,
+    "recv_timeout_s": 1.0,
+    "reconnect_backoff_start_s": 1.0,
+    "reconnect_backoff_max_s": 30.0,
+    "stream_maxlen": 1000,
+    "command_target_component": 1,
+    "command_confirmation": 0,
+    "command_ack_timeout_s": 2.0,
+    "command": {
+      "mission_upload_timeout_s": 30.0,
+      "target_system": 1,
+      "target_component": 1,
+      "frame": 3,
+      "default_waypoint_command": 16,
+      "default_alt_m": 50.0,
+      "default_accept_radius_m": 2.0
+    }
+  },
+  "telemetry": {
+    "heartbeat_period_ms": 1000,
+    "sys_status_period_ms": 500,
+    "gps_period_ms": 1000,
+    "position_period_ms": 500,
+    "stream_fields": [
+      "ts", "lat", "lng", "alt", "speed", "heading",
+      "roll", "pitch", "yaw", "battery_pct", "gps_sats"
+    ],
+    "optional_fields": [
+      "voltage_battery", "throttle", "climb", "airspeed", "mode", "base_mode"
+    ],
+    "publish_optional_fields": false,
+    "sentinels": {
+      "heading_unset": 65535,
+      "battery_unset": -1,
+      "voltage_unset": 65535,
+      "sats_unset": 255
+    }
+  },
+  "sitl": {
+    "default_host": "127.0.0.1",
+    "default_port": 14550,
+    "default_system_id": 1,
+    "default_component_id": 1,
+    "autopilot": 12,
+    "vehicle_type": 2,
+    "base_mode": 209,
+    "custom_mode": 6,
+    "system_status": 4,
+    "mavlink_version": 3,
+    "home": {
+      "lat": 22.8167,
+      "lng": 108.3167,
+      "alt_m": 50.0
+    },
+    "movement": {
+      "speed_mps": 8.0,
+      "circle_radius_m": 120.0,
+      "takeoff_climb_mps": 3.0,
+      "climb_step_m": 5.0
+    },
+    "commands": {
+      "arm": 400,
+      "set_mode": 176,
+      "takeoff": 22,
+      "rtl": 20,
+      "mission_start": 300,
+      "px4_mode_stabilize": 0,
+      "px4_mode_auto": 4,
+      "px4_mode_rtl": 6
+    },
+    "ack_result_accepted": 0,
+    "log_interval_ms": 5000,
+    "state_http_port_env": "SITL_STATE_HTTP_PORT",
+    "state_http_port": 0
+  },
+  "api": {
+    "sim_drones_env": "SIM_DRONES",
+    "default_sim_drones": "1:15001,2:15002,3:15003",
+    "command_http_timeout_s": 3.0,
+    "state_http_timeout_s": 2.0
+  }
+}

@@ -128,9 +128,10 @@ DATABASE_URL=postgresql://skymaster:skymaster@postgres:5432/skymaster
 # Redis配置
 REDIS_URL=redis://redis:6379/0
 
-# MAVLink配置
-MAVLINK_DEFAULT_BAUD_RATE=57600
-MAVLINK_TIMEOUT=5.0
+# MAVLink配置（UDP 链路，无串口波特率；参数见 backend/config/mavlink_sitl.json）
+MAVLINK_ENDPOINT=udpin:0.0.0.0:14550
+MAVLINK20=1
+TELEMETRY_PUBLISH_MS=500
 
 # 设备配置
 DEVICE_MAX_CONNECTIONS=100
