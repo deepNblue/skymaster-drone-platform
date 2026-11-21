@@ -1,0 +1,57 @@
+/**
+ * SkyMaster App Layout · Root Layout (Next.js 14 App Router)
+ * 用法：将本文件放到 frontend/src/app/layout.tsx
+ * 依赖：antd 5.12+, tailwindcss 3+
+ */
+
+import { ConfigProvider } from 'antd';
+import zhCN from 'antd/locale/zh_CN';
+import { skymasterDarkTheme } from '@/theme/skymasterDarkTheme';
+import '@/theme/globals.css';
+
+export const metadata = {
+  title:       'SkyMaster · 智能无人机管控平台',
+  description: '军工级私有化多协议无人机管控平台',
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="zh-CN" className="dark">
+      <body className="bg-base text-text-primary font-sans antialiased overflow-hidden">
+        <ConfigProvider theme={skymasterDarkTheme} locale={zhCN} componentSize="middle">
+          {children}
+        </ConfigProvider>
+      </body>
+    </html>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// 使用示例（放在页面组件中）
+// ═══════════════════════════════════════════════════════════
+
+/*
+// app/dashboard/page.tsx
+'use client';
+import { Card, Button } from 'antd';
+
+export default function DashboardPage() {
+  return (
+    <div className="p-6">
+      <div className="glass-panel data-flow-border panel-badge">
+        <h3 className="font-display text-h3 mb-4">
+          <span>在线设备</span>
+        </h3>
+        <div className="flex items-baseline gap-2">
+          <span className="font-mono text-mono-lg text-accent-primary">
+            12
+          </span>
+          <span className="font-mono text-text-tertiary">/ 15</span>
+        </div>
+      </div>
+
+      <Button type="primary" className="mt-4">进入指挥中心 →</Button>
+    </div>
+  );
+}
+*/

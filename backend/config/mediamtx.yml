@@ -1,0 +1,61 @@
+# MediaMTX configuration — SkyMaster v0.1 (dev / MVP)
+# Docs: https://github.com/bluenviron/mediamtx
+
+# --- Logging -----------------------------------------------------------------
+logLevel: info
+logDestinations: [stdout]
+
+# --- Control API -------------------------------------------------------------
+api: yes
+apiAddress: :9997
+
+# --- Metrics / pprof (off by default) ----------------------------------------
+metrics: no
+pprof: no
+
+# --- Auth (dev-mode: internal store, single admin user) ----------------------
+# NOTE: replace before any non-dev deployment.  For MVP the API is bound to the
+# docker network only.
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+      - action: api
+      - action: metrics
+      - action: pprof
+
+# --- RTSP server (source ingest + playback) ----------------------------------
+rtsp: yes
+rtspAddress: :8554
+protocols: [tcp, udp]
+
+# --- RTMP (legacy publish path from some drone links) ------------------------
+rtmp: yes
+rtmpAddress: :1935
+
+# --- HLS (public playback for web frontend) ----------------------------------
+hls: yes
+hlsAddress: :8888
+hlsAllowOrigin: "*"
+hlsAlwaysRemux: yes
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+
+# --- WebRTC (optional, off for MVP) ------------------------------------------
+webrtc: no
+
+# --- SRT (off for MVP) --------------------------------------------------------
+srt: no
+
+# --- Paths -------------------------------------------------------------------
+# Paths are created dynamically by the SkyMaster API via the HTTP control API
+# (POST /v3/config/paths/add/drone-<uuid>).  We leave `paths` empty here so
+# only registered drones can publish.
+paths:

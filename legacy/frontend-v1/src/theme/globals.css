@@ -1,0 +1,264 @@
+/* ═══════════════════════════════════════════════════════════
+   SkyMaster Global Styles
+   @see docs/UI_DESIGN.md
+   ═══════════════════════════════════════════════════════════ */
+
+/* ─── Fonts ─── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Rajdhani:wght@500;600;700&display=swap');
+
+/* ─── CSS Variables ─── */
+:root {
+  /* Base */
+  --bg-base:         #0d1117;
+  --bg-elevated-1:   #161b22;
+  --bg-elevated-2:   #1c2128;
+  --bg-glass:        rgba(22, 27, 34, 0.6);
+  --border-primary:  #30363d;
+  --border-subtle:   #21262d;
+
+  /* Text */
+  --text-primary:    #e6edf3;
+  --text-secondary:  #8b949e;
+  --text-tertiary:   #6e7681;
+
+  /* Brand */
+  --accent-primary:      #39ff14;
+  --accent-primary-dim:  #26a806;
+  --accent-cyan:         #00ffff;
+  --accent-amber:        #ffb000;
+  --accent-red:          #ff3838;
+  --accent-purple:       #b967ff;
+  --accent-blue:         #4c9aff;
+
+  /* Fonts */
+  --font-sans:    'Inter', 'HarmonyOS Sans SC', system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+  --font-display: 'Rajdhani', 'Orbitron', 'HarmonyOS Sans SC', sans-serif;
+
+  /* Motion */
+  --motion-hover: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --motion-state: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  --motion-page:  500ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ─── Reset & Base ─── */
+* {
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow: hidden;
+}
+
+/* ─── 强制约束：所有数字使用等宽字体 ─── */
+.num,
+.mono,
+code,
+kbd,
+samp,
+pre,
+[data-num],
+input[type="number"] {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" on, "lnum" on;
+}
+
+/* ─── 大屏标题字体 ─── */
+.display,
+.hero-title {
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Utility Classes
+   ═══════════════════════════════════════════════════════════ */
+
+/* ─── Glass Panel ─── */
+.glass-panel {
+  background: var(--bg-glass);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(48, 54, 61, 0.6);
+  border-radius: 4px;
+  padding: 16px;
+}
+
+.glass-panel--sm { padding: 12px; }
+.glass-panel--lg { padding: 24px; }
+
+/* ─── 军品编号感标识（面板左上角小方块） ─── */
+.panel-badge::before {
+  content: '';
+  display: inline-block;
+  width: 4px;
+  height: 14px;
+  background: var(--accent-primary);
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+/* ─── 数据流边框（顶部扫描线） ─── */
+@keyframes dataFlow {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.data-flow-border {
+  position: relative;
+  overflow: hidden;
+}
+
+.data-flow-border::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent-primary), transparent);
+  background-size: 50% 100%;
+  animation: dataFlow 3s linear infinite;
+}
+
+/* ─── 全息投影效果 ─── */
+.hologram {
+  position: relative;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(57, 255, 20, 0.03) 0px,
+    rgba(57, 255, 20, 0.03) 2px,
+    transparent 2px,
+    transparent 4px
+  );
+  mask-image: linear-gradient(to bottom, transparent, black 10%, black 90%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 10%, black 90%, transparent);
+}
+
+.hologram--purple {
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(185, 103, 255, 0.05) 0px,
+    rgba(185, 103, 255, 0.05) 2px,
+    transparent 2px,
+    transparent 4px
+  );
+}
+
+/* ─── 呼吸脉冲（无人机图标 / 状态点） ─── */
+@keyframes pulse {
+  0%   { transform: scale(1);   opacity: 0.6; }
+  100% { transform: scale(2.5); opacity: 0;   }
+}
+
+.pulse {
+  position: relative;
+}
+
+.pulse::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 100%; height: 100%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse 2s ease-out infinite;
+  z-index: -1;
+}
+
+.pulse--alert::after { animation-duration: 0.5s; }
+
+/* ─── 打字机光标 ─── */
+@keyframes blink {
+  0%, 50%  { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.typing-cursor::after {
+  content: '▊';
+  color: var(--accent-purple);
+  animation: blink 1s step-end infinite;
+  margin-left: 2px;
+}
+
+/* ─── 状态圆点 ─── */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
+.status-dot--success { background: var(--accent-primary); }
+.status-dot--warning { background: var(--accent-amber);   }
+.status-dot--danger  { background: var(--accent-red);     }
+.status-dot--info    { background: var(--accent-blue);    }
+.status-dot--offline { background: var(--text-tertiary);  }
+
+/* ═══════════════════════════════════════════════════════════
+   明确禁用（写在这里以防被覆盖）
+   ═══════════════════════════════════════════════════════════ */
+
+/* 禁用外发光 */
+:root {
+  --neon-glow: none !important;
+}
+
+/* 禁用大圆角 */
+.no-large-radius {
+  border-radius: 4px !important;
+}
+
+/* ─── Scrollbar (军工感极窄暗色) ─── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-elevated-1);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-primary);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-primary-dim);
+}
+
+/* ─── 焦点态（无光晕，仅 2px 主色实线） ─── */
+*:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+  box-shadow: none !important;
+}
+
+/* ─── 选择态 ─── */
+::selection {
+  background: rgba(57, 255, 20, 0.3);
+  color: var(--text-primary);
+}
+
+/* ─── prefers-reduced-motion 支持 ─── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

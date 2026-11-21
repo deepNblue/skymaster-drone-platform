@@ -1,0 +1,13 @@
+{
+  "tls": {
+    "enabled": true,
+    "ports": [8883, 443],
+    "ca_certs": "",
+    "certfile": "",
+    "keyfile": "",
+    "client_auth": "none",
+    "tls_version": "TLSv1_2",
+    "ciphers": "",
+    "insecure_skip_verify": false
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "sensor_calibration": {
+    "compass": {
+      "label": "指南针",
+      "duration_s": 12,
+      "hint": "将飞行器水平旋转 360°，避开强磁干扰源"
+    },
+    "imu": {
+      "label": "IMU 惯导",
+      "duration_s": 15,
+      "hint": "保持飞行器静止，等待姿态与加速度计收敛"
+    },
+    "gimbal": {
+      "label": "云台",
+      "duration_s": 8,
+      "hint": "云台自动完成俯仰限位自检，勿触碰相机"
+    },
+    "vision": {
+      "label": "视觉定位",
+      "duration_s": 10,
+      "hint": "保持镜头与传感器无遮挡，完成双目标定"
+    }
+  },
+  "rc_calibration": {
+    "deadzone": 0.05,
+    "steps": [
+      { "key": "throttle_max", "axis": "throttle", "edge": "max", "label": "油门杆推到顶" },
+      { "key": "throttle_min", "axis": "throttle", "edge": "min", "label": "油门杆拉到底" },
+      { "key": "yaw_left", "axis": "yaw", "edge": "min", "label": "左杆推到最左" },
+      { "key": "yaw_right", "axis": "yaw", "edge": "max", "label": "左杆推到最右" },
+      { "key": "pitch_max", "axis": "pitch", "edge": "max", "label": "右杆推到最上" },
+      { "key": "pitch_min", "axis": "pitch", "edge": "min", "label": "右杆推到最下" },
+      { "key": "roll_left", "axis": "roll", "edge": "min", "label": "右杆推到最左" },
+      { "key": "roll_right", "axis": "roll", "edge": "max", "label": "右杆推到最右" },
+      { "key": "center", "axis": "all", "edge": "center", "label": "双杆回中并保持" }
+    ]
+  },
+  "progress_tick_s": 0.5
+}

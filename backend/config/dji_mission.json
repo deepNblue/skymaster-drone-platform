@@ -1,0 +1,56 @@
+{
+  "mission": {
+    "default_alt_m": 80.0,
+    "max_waypoints": 100,
+    "task_id_fields": ["task_id", "mission_id", "flighttask_id"],
+    "progress_fields": ["progress", "percent", "completed_percent", "finish_percent"],
+    "state_fields": ["state", "status", "mission_state", "flight_state", "flighttask_state"],
+    "result_fields": ["result", "code"],
+    "message_fields": ["message", "msg", "reason"],
+    "state_map": {
+      "prepared": "prepared",
+      "ready": "prepared",
+      "pending": "prepared",
+      "idle": "prepared",
+      "executing": "running",
+      "execute": "running",
+      "flying": "running",
+      "in_progress": "running",
+      "inprogress": "running",
+      "running": "running",
+      "doing": "running",
+      "paused": "paused",
+      "pause": "paused",
+      "hold": "paused",
+      "holding": "paused",
+      "success": "success",
+      "succeed": "success",
+      "succeeded": "success",
+      "done": "success",
+      "complete": "success",
+      "completed": "success",
+      "finished": "success",
+      "failed": "failed",
+      "fail": "failed",
+      "error": "failed",
+      "cancelled": "cancelled",
+      "canceled": "cancelled",
+      "stopped": "cancelled"
+    },
+    "numeric_state_map": {
+      "0": "prepared",
+      "1": "running",
+      "2": "paused",
+      "3": "success",
+      "4": "failed",
+      "5": "cancelled"
+    },
+    "terminal_states": ["success", "failed", "cancelled"],
+    "breakpoint_fields": [
+      "waypoint_index", "current_waypoint", "waypoint_idx", "wp_index", "idx"
+    ],
+    "breakpoint_offset": 0,
+    "resume_field": "resume_from_waypoint",
+    "breakpoint_stale_s": 3600
+  }
+}

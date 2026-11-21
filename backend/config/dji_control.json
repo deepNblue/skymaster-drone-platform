@@ -1,0 +1,14 @@
+{
+  "drc": {
+    "ack_delay_ms": 120,
+    "ack_timeout_ms": 3000,
+    "seq_wrap": 65536,
+    "ack_fields": [
+      "drc_ack_seq",
+      "drc_ack",
+      "control_ack_seq",
+      "last_drc_seq",
+      "drc_seq"
+    ]
+  }
+}

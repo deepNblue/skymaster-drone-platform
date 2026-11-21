@@ -1,0 +1,49 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Prod overlay — multi-GPU node pool, HPA, LB Ingress + TLS.
+
+resources:
+  - ../../base
+  - hpa.yaml
+  - pdb.yaml
+
+patches:
+  - target:
+      kind: Deployment
+      name: skymaster-api
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+  - target:
+      kind: Deployment
+      name: skymaster-worker
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 4
+  # Prod ingress: real host + TLS + cert-manager
+  - target:
+      kind: Ingress
+      name: skymaster-api
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: api.skymaster.example.com
+      - op: add
+        path: /metadata/annotations/cert-manager.io~1cluster-issuer
+        value: letsencrypt-prod
+      - op: add
+        path: /spec/tls
+        value:
+          - hosts:
+              - api.skymaster.example.com
+            secretName: skymaster-tls
+
+configMapGenerator:
+  - name: skymaster-config
+    behavior: merge
+    literals:
+      - APP_ENV=production
+      - LOG_LEVEL=WARNING
